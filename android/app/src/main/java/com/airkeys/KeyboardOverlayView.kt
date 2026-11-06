@@ -90,11 +90,22 @@ class KeyboardOverlayView(ctx: Context, startEditable: Boolean) : View(ctx) {
             drawHands(c)
             if (editable) drawHandles(c)
         }
+        val sinceSwipe = SystemClock.uptimeMillis() - Engine.lastSwipeAt
+        if (sinceSwipe < 500L) drawSwipe(c, 1f - sinceSwipe / 500f)
         if (Engine.running && !Engine.calibrating) drawTargetBadge(c)
         if (Engine.calibrating || SystemClock.uptimeMillis() - Engine.calibDoneAt < 2000L) {
             drawCalibration(c)
             if (Engine.calibrating) postInvalidateDelayed(100)
         }
+    }
+
+    /** Big fading ⌫ when a swipe deletes a character. */
+    private fun drawSwipe(c: Canvas, fade: Float) {
+        text.clearShadowLayer()
+        text.textSize = (dst.height() * 0.28f).coerceAtLeast(28f * density)
+        val alpha = (fade * 220).toInt().coerceIn(0, 255)
+        text.color = (alpha shl 24) or (if (Engine.lastDelivered) 0xFFFFFF else 0xEF4444)
+        c.drawText("⌫", dst.centerX(), dst.centerY() - (text.descent() + text.ascent()) / 2f, text)
     }
 
     /** Small badge (top left): where taps are being typed, or why they aren't. */

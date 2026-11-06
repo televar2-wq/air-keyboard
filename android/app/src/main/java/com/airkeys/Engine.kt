@@ -59,6 +59,7 @@ object Engine {
     @Volatile var homeCount = -1
     @Volatile var lastPressed: Key? = null
     @Volatile var lastPressedAt = 0L
+    @Volatile var lastSwipeAt = 0L
     /** False when the last tap couldn't be typed anywhere (shown as a red flash). */
     @Volatile var lastDelivered = true
 
@@ -73,6 +74,10 @@ object Engine {
     @Volatile var frontCamera = true
     @Volatile var flipped = true
     @Volatile var sensitivity = 5          // 1..10
+    @Volatile var rowScale = 1.3f          // key height, 1.0 = normal keyboard proportions
+    @Volatile var fingerZones = true       // touch-typing assist
+    @Volatile var followHands = true       // slowly re-center the keyboard under resting hands
+    @Volatile var swipeBackspace = true
     @Volatile var showWindow = true
     @Volatile var calibratedOnce = false
     @Volatile var board = Board(true)
@@ -101,12 +106,21 @@ object Engine {
         showWindow = p.getBoolean("window", true)
         typingEnabled = p.getBoolean("typing", true)
         calibratedOnce = p.getBoolean("calibrated", false)
+        fingerZones = p.getBoolean("zones", true)
+        followHands = p.getBoolean("follow", true)
+        swipeBackspace = p.getBoolean("swipe", true)
         board = Board(p.getBoolean("numbers", true))
         val c = p.getString("corners", null)
             ?.split(",")?.mapNotNull { it.toFloatOrNull() }
         corners = if (c != null && c.size == 8) c.toFloatArray() else null
+        val rs = p.getFloat("rowScale", -1f)
+        rowScale = if (rs > 0f) rs else 1f
         rebuild()
         loaded = true
+        // Older setups were fitted at normal key height: make the keys taller once.
+        if (rs <= 0f) {
+            if (corners != null) setRowScale(1.3f) else { rowScale = 1.3f; save() }
+        }
     }
 
     private fun prefs(): SharedPreferences? =
@@ -122,8 +136,33 @@ object Engine {
             .putBoolean("typing", typingEnabled)
             .putBoolean("calibrated", calibratedOnce)
             .putBoolean("numbers", board.numbers)
+            .putFloat("rowScale", rowScale)
+            .putBoolean("zones", fingerZones)
+            .putBoolean("follow", followHands)
+            .putBoolean("swipe", swipeBackspace)
             .putString("corners", corners?.joinToString(","))
             .apply()
+    }
+
+    fun homeRowV(): Float = (if (board.numbers) 2 else 1) + 0.5f
+
+    /** Make rows taller/shorter around the home row (keys stay under resting fingers). */
+    fun setRowScale(newScale: Float) {
+        val ns = newScale.coerceIn(1f, 1.8f)
+        val c = corners
+        if (c != null && h != null && kotlin.math.abs(ns - rowScale) > 1e-3f) {
+            val f = ns / rowScale
+            val hv = homeRowV()
+            val top = hv - hv * f
+            val bot = hv + (board.rows - hv) * f
+            val tl = kbToNorm(0f, top)
+            val tr = kbToNorm(Board.COLS, top)
+            val br = kbToNorm(Board.COLS, bot)
+            val bl = kbToNorm(0f, bot)
+            setCorners(floatArrayOf(tl.x, tl.y, tr.x, tr.y, br.x, br.y, bl.x, bl.y))
+        }
+        rowScale = ns
+        save()
     }
 
     fun setCorners(c: FloatArray) {
@@ -262,6 +301,8 @@ object Engine {
             assigned[if (withU[0].second < Board.COLS / 2f) 'L' else 'R'] = withU[0].first
         }
 
+        val trackOf = updateSwipes(raw, now)
+
         val out = ArrayList<Hand>()
         var home = 0
         var seen = false
@@ -274,6 +315,8 @@ object Engine {
             }
             seen = true
             val hs = handSize(p)
+            // While the whole hand is moving fast (swiping, repositioning), don't type.
+            val handFast = (trackOf[p]?.fastUntil ?: 0L) > now
             var bestKey: Key? = null
             var bestTravel = 0f
             val tips = Array(5) { f ->
@@ -289,8 +332,9 @@ object Engine {
                 val kb = normToKb(fs.sx, fs.sy)
                 val key = if (kb != null) board.keyAt(kb.x, kb.y) else null
                 val travel = updateTap(fs, p, f, hs, now)
-                if (travel > bestTravel && key != null) {
-                    bestTravel = travel; bestKey = key
+                if (travel > bestTravel && !handFast) {
+                    val tapKey = if (fingerZones && kb != null) board.resolve(side, f, kb.x, kb.y) else key
+                    if (tapKey != null) { bestTravel = travel; bestKey = tapKey }
                 }
                 Tip(fs.sx, fs.sy, kb?.x ?: -1f, kb?.y ?: -1f, key)
             }
@@ -302,7 +346,112 @@ object Engine {
         hands = out
         homeCount = if (seen) home else -1
         if (calibrating) calibrateStep(raw, now)
+        else if (followHands && out.size == 2) followRestingHands(out, trackOf, now)
         for (l in frameListeners) l()
+    }
+
+    // ------------------------------------------------------------------ swipe to delete
+
+    private class Track(var x: Float, var y: Float, var lastSeen: Long) {
+        val hist = ArrayDeque<Pair<Long, Float>>()   // (time, palm u)
+        var speed = 0f                                // key widths per second, smoothed
+        var fastUntil = 0L
+        var cooldownUntil = 0L
+    }
+
+    private val tracks = ArrayList<Track>()
+    private var lastTapAt = 0L
+    private val SWIPE_KEYS = 3.5f        // how far the hand must travel left (key widths)
+    private val SWIPE_MS = 400L          // …within this time
+    private val FAST_SPEED = 9f          // hand speed (key widths/s) that pauses typing
+
+    /** Follows each palm between frames and turns a quick move to the left into a backspace. */
+    private fun updateSwipes(raw: List<FloatArray>, now: Long): java.util.IdentityHashMap<FloatArray, Track> {
+        val result = java.util.IdentityHashMap<FloatArray, Track>()
+        val used = HashSet<Track>()
+        for (p in raw) {
+            var px = 0f
+            var py = 0f
+            for (i in intArrayOf(0, 5, 9, 13, 17)) { px += p[i * 3]; py += p[i * 3 + 1] }
+            px /= 5f; py /= 5f
+            val u = normToKb(px, py)?.x ?: continue
+            var best: Track? = null
+            var bd = 0.25f
+            for (t in tracks) {
+                if (t in used) continue
+                val d = hypot((t.x - px) * aspect, t.y - py)
+                if (d < bd) { bd = d; best = t }
+            }
+            val t = best ?: Track(px, py, now).also { tracks.add(it) }
+            used.add(t)
+            result[p] = t
+
+            val last = t.hist.lastOrNull()
+            if (last != null) {
+                val dt = max(now - last.first, 1L) / 1000f
+                t.speed = t.speed * 0.5f + kotlin.math.abs(u - last.second) / dt * 0.5f
+            }
+            t.x = px; t.y = py; t.lastSeen = now
+            t.hist.addLast(now to u)
+            while (t.hist.isNotEmpty() && now - t.hist.first().first > SWIPE_MS) t.hist.removeFirst()
+            if (t.speed > FAST_SPEED) t.fastUntil = now + 250L
+
+            val first = t.hist.first()
+            if (swipeBackspace && now >= t.cooldownUntil && u - first.second < -SWIPE_KEYS) {
+                t.cooldownUntil = now + 600L
+                t.fastUntil = now + 350L
+                t.hist.clear()
+                emitBackspace(now)
+            }
+        }
+        tracks.removeAll { now - it.lastSeen > 300L }
+        return result
+    }
+
+    private val BACKSPACE = Key("⌫", -1, 0f, 0f)
+
+    private fun emitBackspace(now: Long) {
+        if (calibrating) return
+        lastSwipeAt = now
+        emit(BACKSPACE, now)
+    }
+
+    // ------------------------------------------------------------------ follow resting hands
+
+    private var lastFollowSave = 0L
+
+    /**
+     * When both hands rest on the home row (each finger within ~half a key of its home key,
+     * not typing, not moving), nudge the keyboard a little toward them. Keeps it lined up
+     * as your hands drift, without ever jumping.
+     */
+    private fun followRestingHands(hs: List<Hand>, trackOf: Map<FloatArray, Track>, now: Long) {
+        if (now - lastTapAt < 700L) return
+        for (h in hs) if ((trackOf[h.pts]?.fastUntil ?: 0L) > now) return
+        val hv = homeRowV()
+        var du = 0f
+        var dv = 0f
+        for (h in hs) {
+            val labels = if (h.side == 'L') HOME_L else HOME_R
+            for (f in 1..4) {
+                val t = h.tips[f]
+                val key = board.keys.firstOrNull { it.label == labels[f] } ?: return
+                val ex = t.u - key.centerU
+                val ey = t.v - hv
+                if (kotlin.math.abs(ex) > 0.6f || kotlin.math.abs(ey) > 0.6f) return
+                du += ex; dv += ey
+            }
+        }
+        du /= 8f; dv /= 8f
+        if (hypot(du, dv) < 0.05f) return
+        val alpha = 0.04f
+        val a = kbToNorm(Board.COLS / 2f, hv)
+        val b = kbToNorm(Board.COLS / 2f + du * alpha, hv + dv * alpha)
+        val c = corners ?: return
+        val sx = b.x - a.x
+        val sy = b.y - a.y
+        setCorners(floatArrayOf(c[0] + sx, c[1] + sy, c[2] + sx, c[3] + sy, c[4] + sx, c[5] + sy, c[6] + sx, c[7] + sy))
+        if (now - lastFollowSave > 3000L) { lastFollowSave = now; save() }
     }
 
     // ------------------------------------------------------------------ calibration
@@ -498,6 +647,7 @@ object Engine {
         val ty = (m[17] + m[19]) / 2f - cy
         var sv = (tx * nx + ty * ny) / spaceGap
         if (sv < 0.3f * su || sv > 1.3f * su) sv = su * (if (frontCamera) 0.55f else 0.95f)
+        sv *= rowScale
 
         fun pt(u: Float, v: Float): PointF {
             val along = a + su * u
@@ -583,6 +733,7 @@ object Engine {
 
     private fun emit(k: Key, now: Long) {
         if (calibrating) return
+        lastTapAt = now
         lastPressed = k
         lastPressedAt = now
         lastDelivered = typingEnabled && imeActive && imeTarget != null && keyListeners.isNotEmpty()

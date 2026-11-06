@@ -64,6 +64,10 @@ class MainActivity : ComponentActivity() {
     private lateinit var btnRows: Button
     private lateinit var btnWindow: Button
     private lateinit var sensLabel: TextView
+    private lateinit var heightLabel: TextView
+    private lateinit var btnZones: Button
+    private lateinit var btnFollow: Button
+    private lateinit var btnSwipe: Button
 
     private val permLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
@@ -184,6 +188,50 @@ class MainActivity : ComponentActivity() {
             gravity = Gravity.CENTER_VERTICAL
             addView(sensLabel)
             addView(seek, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        })
+
+        // Key height
+        heightLabel = TextView(this).apply { setTextColor(Color.WHITE); textSize = 13f }
+        val heightSeek = SeekBar(this).apply {
+            max = 16                                   // 100% … 180% in 5% steps
+            progress = ((Engine.rowScale - 1f) / 0.05f).toInt().coerceIn(0, 16)
+            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                override fun onProgressChanged(s: SeekBar?, p: Int, fromUser: Boolean) {
+                    heightLabel.text = "Key height: ${100 + p * 5}%"
+                    if (fromUser) Engine.setRowScale(1f + p * 0.05f)
+                }
+                override fun onStartTrackingTouch(s: SeekBar?) {}
+                override fun onStopTrackingTouch(s: SeekBar?) {}
+            })
+        }
+        heightLabel.text = "Key height: ${(Engine.rowScale * 100).toInt()}%"
+        panel.addView(LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            addView(heightLabel)
+            addView(heightSeek, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        })
+
+        panel.addView(label("Accuracy"))
+        btnZones = button("Finger zones") {
+            Engine.fingerZones = !Engine.fingerZones; Engine.save(); refresh()
+        }
+        btnFollow = button("Follow hands") {
+            Engine.followHands = !Engine.followHands; Engine.save(); refresh()
+        }
+        btnSwipe = button("Swipe ⌫") {
+            Engine.swipeBackspace = !Engine.swipeBackspace; Engine.save(); refresh()
+        }
+        panel.addView(row(btnZones, btnFollow, btnSwipe))
+
+        panel.addView(TextView(this).apply {
+            text = "Finger zones: each finger only types its own touch-typing keys, so a slightly " +
+                "off tap still lands right. Follow hands: when your fingers rest on the home row, " +
+                "the keyboard quietly re-centers under them. Swipe ⌫: sweep a hand quickly toward " +
+                "the left to delete a character."
+            textSize = 12f
+            setTextColor(0xFF9AA3AF.toInt())
+            setPadding(0, px(2), 0, px(4))
         })
 
         panel.addView(TextView(this).apply {
@@ -343,6 +391,9 @@ class MainActivity : ComponentActivity() {
         btnFlip.text = if (Engine.flipped) "⇅ Flipped" else "⇅ Flip"
         btnRows.text = if (Engine.board.numbers) "123 row: on" else "123 row: off"
         btnWindow.text = if (Engine.showWindow) "Window: on" else "Window: off"
+        btnZones.text = if (Engine.fingerZones) "Finger zones: on" else "Finger zones: off"
+        btnFollow.text = if (Engine.followHands) "Follow hands: on" else "Follow hands: off"
+        btnSwipe.text = if (Engine.swipeBackspace) "Swipe ⌫: on" else "Swipe ⌫: off"
         btnFit.text = if (Engine.calibrating) "✕ Cancel" else "✋ Fit"
         btnFit.setTextColor(if (Engine.calibrating) 0xFF5EEAD4.toInt() else Color.WHITE)
         btnAdjust.text = if (overlay.editable) "✓ Done" else "✥ Adjust"

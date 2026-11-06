@@ -1,6 +1,8 @@
 package com.airkeys
 
 import android.graphics.PointF
+import kotlin.math.hypot
+import kotlin.math.max
 
 /** One key on the virtual keyboard, in key units (a normal letter key is 1 x 1). */
 data class Key(val label: String, val row: Int, val u0: Float, val u1: Float) {
@@ -30,6 +32,42 @@ class Board(val numbers: Boolean) {
         if (u < 0f || v < 0f || u >= COLS || v >= rows.toFloat()) return null
         val r = v.toInt()
         return keys.firstOrNull { it.row == r && u >= it.u0 && u < it.u1 }
+    }
+
+    /** Which finger types this key in standard touch typing: side 'L'/'R', 0 = thumb … 4 = pinky. */
+    fun fingerFor(k: Key): Pair<Char, Int> {
+        val left = k.centerU < COLS / 2f
+        return when (k.label) {
+            "`", "1", "Tab", "Q", "Caps", "A", "Z" -> 'L' to 4
+            "2", "W", "S", "X" -> 'L' to 3
+            "3", "E", "D", "C" -> 'L' to 2
+            "4", "5", "R", "T", "F", "G", "V", "B" -> 'L' to 1
+            "6", "7", "Y", "U", "H", "J", "N", "M" -> 'R' to 1
+            "8", "I", "K", "," -> 'R' to 2
+            "9", "O", "L", "." -> 'R' to 3
+            "Space" -> (if (left) 'L' else 'R') to 0
+            "Shift", "Ctrl", "Win", "Alt", "Fn", "Menu" -> (if (left) 'L' else 'R') to 4
+            else -> 'R' to 4      // 0 - = ⌫ P [ ] \ ; ' Enter /
+        }
+    }
+
+    /**
+     * Finger zones: a tap by a given finger can only type that finger's keys; pick the
+     * nearest of them. Much more forgiving than "whatever key is under the fingertip".
+     */
+    fun resolve(side: Char, finger: Int, u: Float, v: Float): Key? {
+        if (finger == 0) return keys.firstOrNull { it.label == "Space" }
+        var best: Key? = null
+        var bd = Float.MAX_VALUE
+        for (k in keys) {
+            val (s, f) = fingerFor(k)
+            if (s != side || f != finger) continue
+            val dx = max(k.u0 - u, max(0f, u - k.u1))
+            val dy = max(k.row - v, max(0f, v - (k.row + 1)))
+            val d = hypot(dx, dy)
+            if (d < bd) { bd = d; best = k }
+        }
+        return if (bd <= 1.5f) best else null
     }
 
     companion object {
