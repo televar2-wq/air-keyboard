@@ -7,6 +7,7 @@ import android.inputmethodservice.InputMethodService
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.text.InputType
 import android.view.Gravity
 import android.view.KeyEvent
 import android.view.View
@@ -65,10 +66,36 @@ class AirKeyboardIme : InputMethodService() {
         Engine.load(this)
         Engine.keyListeners.add(listener)
         Engine.stateListeners.add(stateListener)
+        Engine.imeActive = true
         d = resources.displayMetrics.density
     }
 
+    // Report which app/field we're attached to, so the camera view can show it.
+    override fun onStartInput(attribute: EditorInfo?, restarting: Boolean) {
+        super.onStartInput(attribute, restarting)
+        Engine.imeActive = true
+        val pkg = attribute?.packageName
+        val isEditor = attribute != null && attribute.inputType != InputType.TYPE_NULL
+        Engine.imeTarget = if (pkg != null && isEditor && pkg != packageName) appLabel(pkg)
+                           else if (pkg == packageName && isEditor) "Air Keys test field"
+                           else null
+    }
+
+    override fun onFinishInput() {
+        Engine.imeTarget = null
+        super.onFinishInput()
+    }
+
+    private fun appLabel(pkg: String): String = try {
+        val info = packageManager.getApplicationInfo(pkg, 0)
+        packageManager.getApplicationLabel(info).toString()
+    } catch (_: Exception) {
+        pkg.substringAfterLast('.').replaceFirstChar { it.uppercase() }
+    }
+
     override fun onDestroy() {
+        Engine.imeActive = false
+        Engine.imeTarget = null
         Engine.keyListeners.remove(listener)
         Engine.stateListeners.remove(stateListener)
         ui.removeCallbacks(tick)

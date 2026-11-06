@@ -112,8 +112,14 @@ class MainActivity : ComponentActivity() {
             refresh()
         }
         btnTypingTop = smallButton("Typing") {
-            Engine.typingEnabled = !Engine.typingEnabled
-            Engine.save()
+            if (Engine.typingEnabled && !Engine.imeActive) {
+                // The usual reason taps don't type: Air Keys isn't the active keyboard.
+                if (imeEnabled()) imm().showInputMethodPicker()
+                else startActivity(Intent(Settings.ACTION_INPUT_METHOD_SETTINGS))
+            } else {
+                Engine.typingEnabled = !Engine.typingEnabled
+                Engine.save()
+            }
             refresh()
         }
         btnSetup = smallButton("⚙") {
@@ -341,10 +347,25 @@ class MainActivity : ComponentActivity() {
         btnFit.setTextColor(if (Engine.calibrating) 0xFF5EEAD4.toInt() else Color.WHITE)
         btnAdjust.text = if (overlay.editable) "✓ Done" else "✥ Adjust"
         btnAdjust.setTextColor(if (overlay.editable) 0xFF5EEAD4.toInt() else Color.WHITE)
-        btnTypingTop.text = if (Engine.typingEnabled) "⌨ On" else "⌨ Off"
-        btnTypingTop.setTextColor(if (Engine.typingEnabled) 0xFF5EEAD4.toInt() else Color.LTGRAY)
+        updateTypingButton()
         btnSetup.setTextColor(if (showSetup) 0xFF5EEAD4.toInt() else Color.WHITE)
         updateStatus()
+    }
+
+    private fun updateTypingButton() {
+        val needsKeyboard = Engine.typingEnabled && !Engine.imeActive
+        btnTypingTop.text = when {
+            needsKeyboard -> "⌨ Choose"
+            Engine.typingEnabled -> "⌨ On"
+            else -> "⌨ Off"
+        }
+        btnTypingTop.setTextColor(
+            when {
+                needsKeyboard -> 0xFFFCA5A5.toInt()
+                Engine.typingEnabled -> 0xFF5EEAD4.toInt()
+                else -> Color.LTGRAY
+            }
+        )
     }
 
     private fun updateStatus() {
@@ -356,12 +377,13 @@ class MainActivity : ComponentActivity() {
         } else {
             val hc = Engine.homeCount
             parts.add(if (hc < 0) "No hands in view" else if (hc == 8) "Home row ✓ 8/8" else "Home row $hc/8")
-            Engine.lastPressed?.let { parts.add("last: ${it.label}") }
+            Engine.lastPressed?.let { parts.add("last: ${it.label}" + if (Engine.lastDelivered) "" else " (not typed)") }
         }
         if (overlay.editable) parts.add("drag the corners")
         if (!Engine.calibratedOnce && Engine.running && !Engine.calibrating) parts.add("tap ✋ Fit to line up the keyboard")
         status.text = parts.joinToString("  ·  ")
         btnFit.text = if (Engine.calibrating) "✕ Cancel" else "✋ Fit"
+        updateTypingButton()
         btnStart.text = if (Engine.running) "■ Stop camera" else "▶ Start camera"
         if (Engine.running) window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         else window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)

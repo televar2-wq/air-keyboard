@@ -40,6 +40,7 @@ class KeyboardOverlayView(ctx: Context, startEditable: Boolean) : View(ctx) {
     private val bmpPaint = Paint(Paint.FILTER_BITMAP_FLAG)
     private val dash = DashPathEffect(floatArrayOf(10f * density, 6f * density), 0f)
     private val dst = RectF()
+    private val badgeRect = RectF()
     private val listener: () -> Unit = { postInvalidate() }
 
     private var dragIdx = -2          // -2 none, -1 whole keyboard, 0..3 a corner
@@ -89,10 +90,35 @@ class KeyboardOverlayView(ctx: Context, startEditable: Boolean) : View(ctx) {
             drawHands(c)
             if (editable) drawHandles(c)
         }
+        if (Engine.running && !Engine.calibrating) drawTargetBadge(c)
         if (Engine.calibrating || SystemClock.uptimeMillis() - Engine.calibDoneAt < 2000L) {
             drawCalibration(c)
             if (Engine.calibrating) postInvalidateDelayed(100)
         }
+    }
+
+    /** Small badge (top left): where taps are being typed, or why they aren't. */
+    private fun drawTargetBadge(c: Canvas) {
+        val ready = Engine.typingReady()
+        val msg = (if (ready) "⌨ " else "⚠ ") + Engine.typingTargetText()
+        text.clearShadowLayer()
+        text.textSize = 12f * density
+        val maxW = width - 70f * density
+        var label = msg
+        while (label.length > 4 && text.measureText(label) > maxW) label = label.dropLast(2) + "…"
+        val tw = text.measureText(label)
+        val padX = 8f * density
+        val h = 22f * density
+        val x0 = 6f * density
+        val y0 = 6f * density
+        fill.color = if (ready) 0xCC0E1116.toInt() else 0xE6B91C1C.toInt()
+        badgeRect.set(x0, y0, x0 + tw + padX * 2, y0 + h)
+        c.drawRoundRect(badgeRect, h / 2f, h / 2f, fill)
+        text.color = if (ready) accent else Color.WHITE
+        val oldAlign = text.textAlign
+        text.textAlign = Paint.Align.LEFT
+        c.drawText(label, x0 + padX, y0 + h / 2f - (text.descent() + text.ascent()) / 2f, text)
+        text.textAlign = oldAlign
     }
 
     /** Banner with the hold-still prompt and a progress bar. */
@@ -151,6 +177,7 @@ class KeyboardOverlayView(ctx: Context, startEditable: Boolean) : View(ctx) {
             val col = lit[k]
             val isPressed = k == pressed
             fill.color = when {
+                isPressed && !Engine.lastDelivered -> 0xFFEF4444.toInt()
                 isPressed -> Color.WHITE
                 col != null -> (col and 0x00FFFFFF) or 0xC0000000.toInt()
                 else -> 0x55000000

@@ -5,12 +5,15 @@ import android.content.Context
 import android.graphics.Color
 import android.graphics.PixelFormat
 import android.graphics.drawable.GradientDrawable
+import android.os.Handler
+import android.os.Looper
 import android.provider.Settings
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
 import android.view.WindowManager
+import android.view.inputmethod.InputMethodManager
 import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.TextView
@@ -26,6 +29,13 @@ class FloatingWindow(private val ctx: Context) {
     private val d = ctx.resources.displayMetrics.density
     private var root: FrameLayout? = null
     private var typingLabel: TextView? = null
+    private val ui = Handler(Looper.getMainLooper())
+    private val labelTick = object : Runnable {
+        override fun run() {
+            updateTypingLabel()
+            if (root != null) ui.postDelayed(this, 500)
+        }
+    }
 
     private val params = WindowManager.LayoutParams(
         (300 * d).toInt(),
@@ -52,7 +62,11 @@ class FloatingWindow(private val ctx: Context) {
     }
 
     private fun updateTypingLabel() {
-        typingLabel?.text = if (Engine.typingEnabled) "⌨ typing on" else "⌨ typing off"
+        typingLabel?.text = when {
+            Engine.typingEnabled && !Engine.imeActive -> "⌨ choose keyboard"
+            Engine.typingEnabled -> "⌨ typing on"
+            else -> "⌨ typing off"
+        }
         typingLabel?.setTextColor(if (Engine.typingEnabled) 0xFF5EEAD4.toInt() else Color.LTGRAY)
     }
 
@@ -95,8 +109,14 @@ class FloatingWindow(private val ctx: Context) {
         typingLabel = typing
         updateTypingLabel()
         typing.setOnClickListener {
-            Engine.typingEnabled = !Engine.typingEnabled
-            Engine.save()
+            if (Engine.typingEnabled && !Engine.imeActive) {
+                try {
+                    (ctx.getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager).showInputMethodPicker()
+                } catch (_: Exception) {}
+            } else {
+                Engine.typingEnabled = !Engine.typingEnabled
+                Engine.save()
+            }
             updateTypingLabel()
         }
         val fit = pill("✋")
@@ -149,6 +169,7 @@ class FloatingWindow(private val ctx: Context) {
         try {
             wm.addView(frame, params)
             root = frame
+            ui.post(labelTick)
         } catch (e: Exception) {
             root = null
         }
@@ -159,6 +180,7 @@ class FloatingWindow(private val ctx: Context) {
     }
 
     fun hide() {
+        ui.removeCallbacks(labelTick)
         root?.let { try { wm.removeView(it) } catch (_: Exception) {} }
         root = null
         typingLabel = null

@@ -59,6 +59,14 @@ object Engine {
     @Volatile var homeCount = -1
     @Volatile var lastPressed: Key? = null
     @Volatile var lastPressedAt = 0L
+    /** False when the last tap couldn't be typed anywhere (shown as a red flash). */
+    @Volatile var lastDelivered = true
+
+    // ---- keyboard connection (reported by the Air Keys keyboard service) ----
+    /** The Air Keys keyboard is the active system keyboard. */
+    @Volatile var imeActive = false
+    /** It's attached to a text field; the app's label (or package) is here. */
+    @Volatile var imeTarget: String? = null
     @Volatile var typingEnabled = true
 
     // ---- settings ----
@@ -577,9 +585,20 @@ object Engine {
         if (calibrating) return
         lastPressed = k
         lastPressedAt = now
-        if (!typingEnabled) return
+        lastDelivered = typingEnabled && imeActive && imeTarget != null && keyListeners.isNotEmpty()
+        if (!lastDelivered) return
         main.post { for (l in keyListeners) l(k) }
     }
+
+    /** One-line description of where taps go right now, or why they don't. */
+    fun typingTargetText(): String = when {
+        !typingEnabled -> "Typing paused"
+        !imeActive -> "Not typing: Air Keys isn't your keyboard"
+        imeTarget == null -> "Tap a text field in the other app"
+        else -> "Typing into $imeTarget"
+    }
+
+    fun typingReady(): Boolean = typingEnabled && imeActive && imeTarget != null
 
     fun clearLive() {
         frame = null
