@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Air Keys</string>
+    <string name="ime_name">Air Keys (camera)</string>
+    <string name="subtype_en">English (US)</string>
+</resources>
