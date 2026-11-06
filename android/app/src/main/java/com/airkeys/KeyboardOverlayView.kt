@@ -12,7 +12,10 @@ import android.graphics.Typeface
 import android.os.SystemClock
 import android.view.MotionEvent
 import android.view.View
+import kotlin.math.abs
 import kotlin.math.hypot
+import kotlin.math.max
+import kotlin.math.min
 
 /**
  * Draws the camera frame, the keyboard (with perspective), lit keys under each
@@ -40,6 +43,12 @@ class KeyboardOverlayView(ctx: Context, startEditable: Boolean) : View(ctx) {
     private val bmpPaint = Paint(Paint.FILTER_BITMAP_FLAG)
     private val dash = DashPathEffect(floatArrayOf(10f * density, 6f * density), 0f)
     private val dst = RectF()
+    private val target = RectF()
+    private var haveDst = false
+
+    /** Height of controls drawn over the top of this view; banners go below it. */
+    var topInset = 0f
+        set(value) { field = value; invalidate() }
     private val badgeRect = RectF()
     private val listener: () -> Unit = { postInvalidate() }
 
@@ -58,15 +67,54 @@ class KeyboardOverlayView(ctx: Context, startEditable: Boolean) : View(ctx) {
         super.onDetachedFromWindow()
     }
 
+    /**
+     * Where the camera image goes. It always fills the view (cropping the edges, no black
+     * bars). When the keyboard is set up it also zooms in so the keyboard fills the view.
+     * Changes glide smoothly instead of jumping.
+     */
     private fun layoutDst(): Boolean {
         val vw = width.toFloat()
         val vh = height.toFloat()
         if (vw <= 0f || vh <= 0f) return false
         val a = Engine.aspect
-        var w = vw
-        var h = w / a
-        if (h > vh) { h = vh; w = h * a }
-        dst.set((vw - w) / 2f, (vh - h) / 2f, (vw + w) / 2f, (vh + h) / 2f)
+        val cover = max(vw / a, vh)                 // px per image-height that fills the view
+        var s = cover
+        var cx = a / 2f
+        var cy = 0.5f
+        val cs = Engine.corners
+        if (Engine.zoomToKeyboard && cs != null && !editable && !Engine.calibrating) {
+            var x0 = Float.MAX_VALUE; var x1 = -Float.MAX_VALUE
+            var y0 = Float.MAX_VALUE; var y1 = -Float.MAX_VALUE
+            for (i in 0..3) {
+                x0 = min(x0, cs[i * 2]); x1 = max(x1, cs[i * 2])
+                y0 = min(y0, cs[i * 2 + 1]); y1 = max(y1, cs[i * 2 + 1])
+            }
+            val mx = (x1 - x0) * 0.04f
+            val my = (y1 - y0) * 0.10f
+            x0 -= mx; x1 += mx; y0 -= my; y1 += my
+            val rw = max((x1 - x0) * a, 0.05f)
+            val rh = max(y1 - y0, 0.05f)
+            val usableH = max(vh - topInset, vh * 0.5f)
+            s = max(min(vw / rw, usableH / rh), cover)
+            cx = (x0 + x1) / 2f * a
+            cy = (y0 + y1) / 2f
+        }
+        val centerY = topInset + (vh - topInset) / 2f
+        val left = (vw / 2f - cx * s).coerceIn(vw - a * s, 0f)
+        val top = (centerY - cy * s).coerceIn(vh - s, 0f)
+        target.set(left, top, left + a * s, top + s)
+
+        if (!haveDst || dragIdx != -2) {
+            dst.set(target); haveDst = true
+        } else {
+            val k = 0.2f
+            dst.set(
+                dst.left + (target.left - dst.left) * k, dst.top + (target.top - dst.top) * k,
+                dst.right + (target.right - dst.right) * k, dst.bottom + (target.bottom - dst.bottom) * k
+            )
+            if (abs(dst.left - target.left) + abs(dst.right - target.right) +
+                abs(dst.top - target.top) + abs(dst.bottom - target.bottom) > 1f) postInvalidateOnAnimation()
+        }
         return true
     }
 
@@ -93,10 +141,32 @@ class KeyboardOverlayView(ctx: Context, startEditable: Boolean) : View(ctx) {
         val sinceSwipe = SystemClock.uptimeMillis() - Engine.lastSwipeAt
         if (sinceSwipe < 500L) drawSwipe(c, 1f - sinceSwipe / 500f)
         if (Engine.running && !Engine.calibrating) drawTargetBadge(c)
+        if (Engine.composing.isNotEmpty() && !Engine.calibrating) drawComposing(c)
         if (Engine.calibrating || SystemClock.uptimeMillis() - Engine.calibDoneAt < 2000L) {
             drawCalibration(c)
             if (Engine.calibrating) postInvalidateDelayed(100)
         }
+    }
+
+    /** The word autocorrect thinks you're typing, bottom center. */
+    private fun drawComposing(c: Canvas) {
+        val word = Engine.composing
+        text.clearShadowLayer()
+        text.textSize = 20f * density
+        val tw = text.measureText(word)
+        val padX = 14f * density
+        val h = 36f * density
+        val cxp = width / 2f
+        val y1 = height - 10f * density
+        badgeRect.set(cxp - tw / 2f - padX, y1 - h, cxp + tw / 2f + padX, y1)
+        fill.color = 0xE60E1116.toInt()
+        c.drawRoundRect(badgeRect, h / 2f, h / 2f, fill)
+        stroke.pathEffect = null
+        stroke.strokeWidth = 1.5f * density
+        stroke.color = accent
+        c.drawRoundRect(badgeRect, h / 2f, h / 2f, stroke)
+        text.color = Color.WHITE
+        c.drawText(word, cxp, y1 - h / 2f - (text.descent() + text.ascent()) / 2f, text)
     }
 
     /** Big fading ⌫ when a swipe deletes a character. */
@@ -121,7 +191,7 @@ class KeyboardOverlayView(ctx: Context, startEditable: Boolean) : View(ctx) {
         val padX = 8f * density
         val h = 22f * density
         val x0 = 6f * density
-        val y0 = 6f * density
+        val y0 = topInset + 6f * density
         fill.color = if (ready) 0xCC0E1116.toInt() else 0xE6B91C1C.toInt()
         badgeRect.set(x0, y0, x0 + tw + padX * 2, y0 + h)
         c.drawRoundRect(badgeRect, h / 2f, h / 2f, fill)
@@ -136,6 +206,8 @@ class KeyboardOverlayView(ctx: Context, startEditable: Boolean) : View(ctx) {
     private fun drawCalibration(c: Canvas) {
         val w = width.toFloat()
         val bandH = 46f * density
+        c.save()
+        c.translate(0f, topInset)
         fill.color = 0xE60E1116.toInt()
         c.drawRect(0f, 0f, w, bandH, fill)
 
@@ -156,6 +228,7 @@ class KeyboardOverlayView(ctx: Context, startEditable: Boolean) : View(ctx) {
         fill.color = accent
         val p = if (Engine.calibrating) Engine.calibProgress else 1f
         c.drawRect(0f, bandH - barH, w * p, bandH, fill)
+        c.restore()
     }
 
     private fun keyQuad(u0: Float, v0: Float, u1: Float, v1: Float) {

@@ -78,6 +78,10 @@ object Engine {
     @Volatile var fingerZones = true       // touch-typing assist
     @Volatile var followHands = true       // slowly re-center the keyboard under resting hands
     @Volatile var swipeBackspace = true
+    @Volatile var autocorrect = true
+    @Volatile var zoomToKeyboard = true
+    /** The word being typed (autocorrect's current guess), shown on the camera view. */
+    @Volatile var composing = ""
     @Volatile var showWindow = true
     @Volatile var calibratedOnce = false
     @Volatile var board = Board(true)
@@ -88,7 +92,7 @@ object Engine {
     @Volatile private var hInv: Homography? = null
 
     val frameListeners = CopyOnWriteArraySet<() -> Unit>()
-    val keyListeners = CopyOnWriteArraySet<(Key) -> Unit>()
+    val keyListeners = CopyOnWriteArraySet<(Tap) -> Unit>()
 
     private var loaded = false
     private var appCtx: Context? = null
@@ -109,6 +113,8 @@ object Engine {
         fingerZones = p.getBoolean("zones", true)
         followHands = p.getBoolean("follow", true)
         swipeBackspace = p.getBoolean("swipe", true)
+        autocorrect = p.getBoolean("autocorrect", true)
+        zoomToKeyboard = p.getBoolean("zoom", true)
         board = Board(p.getBoolean("numbers", true))
         val c = p.getString("corners", null)
             ?.split(",")?.mapNotNull { it.toFloatOrNull() }
@@ -140,6 +146,8 @@ object Engine {
             .putBoolean("zones", fingerZones)
             .putBoolean("follow", followHands)
             .putBoolean("swipe", swipeBackspace)
+            .putBoolean("autocorrect", autocorrect)
+            .putBoolean("zoom", zoomToKeyboard)
             .putString("corners", corners?.joinToString(","))
             .apply()
     }
@@ -325,6 +333,7 @@ object Engine {
             // While the whole hand is moving fast (swiping, repositioning), don't type.
             val handFast = (trackOf[p]?.fastUntil ?: 0L) > now
             var bestKey: Key? = null
+            var bestTap: Tap? = null
             var bestTravel = 0f
             var fired = 0
             val tips = Array(5) { f ->
@@ -343,7 +352,10 @@ object Engine {
                 if (travel > 0f) fired++
                 if (travel > bestTravel && !handFast) {
                     val tapKey = if (fingerZones && kb != null) board.resolve(side, f, kb.x, kb.y) else key
-                    if (tapKey != null) { bestTravel = travel; bestKey = tapKey }
+                    if (tapKey != null && kb != null) {
+                        bestTravel = travel; bestKey = tapKey
+                        bestTap = Tap(tapKey, kb.x, kb.y, side, f)
+                    }
                 }
                 Tip(fs.sx, fs.sy, kb?.x ?: -1f, kb?.y ?: -1f, key)
             }
@@ -352,7 +364,7 @@ object Engine {
             out.add(Hand(side, p, tips))
             // Several fingers "tapping" at once is the whole hand moving or a tracking glitch.
             val dropping = fired + st.count { it.phase == 1 }
-            if (dropping < 3) bestKey?.let { emit(it, now) }
+            if (dropping < 3) bestTap?.let { emit(it, now) }
         }
         hands = out
         homeCount = if (seen) home else -1
@@ -424,7 +436,7 @@ object Engine {
     private fun emitBackspace(now: Long) {
         if (calibrating) return
         lastSwipeAt = now
-        emit(BACKSPACE, now)
+        emit(Tap(BACKSPACE, -1f, -1f, 'R', 4), now)
     }
 
     // ------------------------------------------------------------------ follow resting hands
@@ -772,14 +784,14 @@ object Engine {
         return 0f
     }
 
-    private fun emit(k: Key, now: Long) {
+    private fun emit(t: Tap, now: Long) {
         if (calibrating) return
         lastTapAt = now
-        lastPressed = k
+        lastPressed = t.key
         lastPressedAt = now
         lastDelivered = typingEnabled && imeActive && imeTarget != null && keyListeners.isNotEmpty()
         if (!lastDelivered) return
-        main.post { for (l in keyListeners) l(k) }
+        main.post { for (l in keyListeners) l(t) }
     }
 
     /** One-line description of where taps go right now, or why they don't. */

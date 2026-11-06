@@ -39,6 +39,18 @@ jobs:
           curl -fsSL -o app/src/main/assets/hand_landmarker.task \
             https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task
 
+      # English word frequencies for autocorrect (falls back to a smaller list).
+      - name: Download word list
+        run: |
+          mkdir -p app/src/main/assets
+          curl -fsSL -o app/src/main/assets/words.txt \
+              https://raw.githubusercontent.com/hermitdave/FrequencyWords/master/content/2018/en/en_50k.txt \
+            || curl -fsSL -o app/src/main/assets/words.txt \
+              https://raw.githubusercontent.com/first20hours/google-10000-english/master/google-10000-english-usa.txt \
+            || echo "the 1" > app/src/main/assets/words.txt
+          wc -l app/src/main/assets/words.txt > /tmp/words-info
+          head -5 app/src/main/assets/words.txt >> /tmp/words-info
+
       - name: Build APK
         shell: bash
         run: |
@@ -57,6 +69,7 @@ jobs:
             cp android/app/build/outputs/apk/debug/app-debug.apk /tmp/out/AirKeys.apk
           fi
           echo "${{ job.status }} run=${{ github.run_number }} sha=${{ github.sha }}" > /tmp/out/STATUS
+          cat /tmp/words-info >> /tmp/out/STATUS 2>/dev/null || true
           cd /tmp/out
           git init -q -b build-output
           git add -A

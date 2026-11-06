@@ -68,6 +68,8 @@ class MainActivity : ComponentActivity() {
     private lateinit var btnZones: Button
     private lateinit var btnFollow: Button
     private lateinit var btnSwipe: Button
+    private lateinit var btnAuto: Button
+    private lateinit var btnZoom: Button
 
     private val permLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
@@ -89,16 +91,16 @@ class MainActivity : ComponentActivity() {
         Engine.load(this)
         d = resources.displayMetrics.density
 
-        val root = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setBackgroundColor(0xFF0E1116.toInt())
-            setPadding(px(6), px(6), px(6), px(6))
-        }
+        // Camera view fills the whole screen; controls float on top of it.
+        val root = android.widget.FrameLayout(this).apply { setBackgroundColor(Color.BLACK) }
+        val chrome = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
 
         // ---- slim top bar (always visible) ----
         val topBar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
+            setBackgroundColor(0x990E1116.toInt())
+            setPadding(px(4), px(4), px(4), px(4))
         }
         status = TextView(this).apply {
             textSize = 12.5f
@@ -134,7 +136,7 @@ class MainActivity : ComponentActivity() {
         topBar.addView(btnAdjust)
         topBar.addView(btnTypingTop)
         topBar.addView(btnSetup)
-        root.addView(topBar)
+        chrome.addView(topBar)
 
         // ---- setup panel (folds away in full view) ----
         val panel = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
@@ -222,7 +224,13 @@ class MainActivity : ComponentActivity() {
         btnSwipe = button("Swipe ⌫") {
             Engine.swipeBackspace = !Engine.swipeBackspace; Engine.save(); refresh()
         }
-        panel.addView(row(btnZones, btnFollow, btnSwipe))
+        btnAuto = button("Autocorrect") {
+            Engine.autocorrect = !Engine.autocorrect; Engine.save(); refresh()
+        }
+        btnZoom = button("Zoom") {
+            Engine.zoomToKeyboard = !Engine.zoomToKeyboard; Engine.save(); refresh(); overlay.invalidate()
+        }
+        panel.addView(row(btnAuto, btnZones, btnFollow, btnSwipe, btnZoom))
 
         panel.addView(TextView(this).apply {
             text = "Finger zones: each finger only types its own touch-typing keys, so a slightly " +
@@ -250,12 +258,19 @@ class MainActivity : ComponentActivity() {
             setHintTextColor(0xFF6B7280.toInt())
         })
 
-        setupPanel = ScrollView(this).apply { addView(panel) }
-        root.addView(setupPanel, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        setupPanel = ScrollView(this).apply {
+            setBackgroundColor(0xF20E1116.toInt())
+            setPadding(px(8), 0, px(8), px(8))
+            addView(panel)
+        }
+        chrome.addView(setupPanel, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
 
         // ---- live view ----
         overlay = KeyboardOverlayView(this, false)
-        root.addView(overlay, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
+        root.addView(overlay, android.widget.FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        root.addView(chrome, android.widget.FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        // Banners and zoom keep clear of the top bar.
+        topBar.addOnLayoutChangeListener { v, _, _, _, _, _, _, _, _ -> overlay.topInset = v.height.toFloat() }
 
         setContentView(root)
 
@@ -394,6 +409,8 @@ class MainActivity : ComponentActivity() {
         btnZones.text = if (Engine.fingerZones) "Finger zones: on" else "Finger zones: off"
         btnFollow.text = if (Engine.followHands) "Follow hands: on" else "Follow hands: off"
         btnSwipe.text = if (Engine.swipeBackspace) "Swipe ⌫: on" else "Swipe ⌫: off"
+        btnAuto.text = if (Engine.autocorrect) "Autocorrect: on" else "Autocorrect: off"
+        btnZoom.text = if (Engine.zoomToKeyboard) "Zoom to keyboard: on" else "Zoom to keyboard: off"
         btnFit.text = if (Engine.calibrating) "✕ Cancel" else "✋ Fit"
         btnFit.setTextColor(if (Engine.calibrating) 0xFF5EEAD4.toInt() else Color.WHITE)
         btnAdjust.text = if (overlay.editable) "✓ Done" else "✥ Adjust"

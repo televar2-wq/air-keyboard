@@ -34,7 +34,9 @@ class AirKeyboardIme : InputMethodService() {
     private var shiftBtn: Button? = null
     private var d = 1f
 
-    private val listener: (Key) -> Unit = { onAirKey(it) }
+    private val listener: (Tap) -> Unit = { onAirKey(it) }
+    private val decoder = WordDecoder()
+    private var capFirst = false
 
     private val stateListener: () -> Unit = {
         if (Engine.running) {
@@ -64,6 +66,7 @@ class AirKeyboardIme : InputMethodService() {
     override fun onCreate() {
         super.onCreate()
         Engine.load(this)
+        Lexicon.load(this)
         Engine.keyListeners.add(listener)
         Engine.stateListeners.add(stateListener)
         Engine.imeActive = true
@@ -73,6 +76,7 @@ class AirKeyboardIme : InputMethodService() {
     // Report which app/field we're attached to, so the camera view can show it.
     override fun onStartInput(attribute: EditorInfo?, restarting: Boolean) {
         super.onStartInput(attribute, restarting)
+        resetWord()
         Engine.imeActive = true
         val pkg = attribute?.packageName
         val isEditor = attribute != null && attribute.inputType != InputType.TYPE_NULL
@@ -81,7 +85,20 @@ class AirKeyboardIme : InputMethodService() {
                            else null
     }
 
+    // If the cursor moves away from the word being typed, start a new word.
+    override fun onUpdateSelection(
+        oldSelStart: Int, oldSelEnd: Int, newSelStart: Int, newSelEnd: Int,
+        candidatesStart: Int, candidatesEnd: Int
+    ) {
+        super.onUpdateSelection(oldSelStart, oldSelEnd, newSelStart, newSelEnd, candidatesStart, candidatesEnd)
+        if (!decoder.isEmpty() && candidatesEnd != -1 && (newSelStart != newSelEnd || newSelEnd != candidatesEnd)) {
+            currentInputConnection?.finishComposingText()
+            resetWord()
+        }
+    }
+
     override fun onFinishInput() {
+        resetWord()
         Engine.imeTarget = null
         super.onFinishInput()
     }
@@ -133,9 +150,9 @@ class AirKeyboardIme : InputMethodService() {
         val keys = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         shiftBtn = key("⇧") { shift = !shift; updateBar() }
         keys.addView(shiftBtn, weight(1f))
-        keys.addView(key("⌫") { backspace() }, weight(1f))
-        keys.addView(key("space") { currentInputConnection?.commitText(" ", 1) }, weight(3f))
-        keys.addView(key("↵") { sendKeyChar('\n') }, weight(1f))
+        keys.addView(key("⌫") { currentInputConnection?.let { deleteBack(it) } }, weight(1f))
+        keys.addView(key("space") { currentInputConnection?.let { finishWord(it); it.commitText(" ", 1) } }, weight(3f))
+        keys.addView(key("↵") { currentInputConnection?.let { finishWord(it) }; sendKeyChar('\n') }, weight(1f))
         keys.addView(key("🌐") {
             (getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager).showInputMethodPicker()
         }, weight(1f))
@@ -166,28 +183,80 @@ class AirKeyboardIme : InputMethodService() {
 
     // ------------------------------------------------------------ typing
 
-    private fun onAirKey(k: Key) {
+    private val wordSymbols = setOf("0", "1", "2", "3", "4", "5", "6", "7", "8", "9", ";", "'", "[", "]", "\\", "-", "=", "/", "`")
+
+    private fun onAirKey(t: Tap) {
         if (!Engine.typingEnabled) return
         val ic = currentInputConnection ?: return
-        when (val l = k.label) {
-            "Space" -> ic.commitText(" ", 1)
-            "⌫" -> backspace()
-            "Enter" -> sendKeyChar('\n')
-            "Tab" -> ic.commitText("\t", 1)
-            "Shift" -> shift = !shift
-            "Caps" -> caps = !caps
-            "Ctrl", "Win", "Alt", "Fn", "Menu" -> {}
-            else -> {
-                val out = if (l.length == 1 && l[0].isLetter()) {
-                    if (shift xor caps) l.uppercase() else l.lowercase()
-                } else {
-                    if (shift) shifted[l] ?: l else l
-                }
-                ic.commitText(out, 1)
+        val l = t.key.label
+        val auto = Engine.autocorrect && Lexicon.ready
+        val isLetter = l.length == 1 && l[0].isLetter()
+        when {
+            l == "⌫" -> deleteBack(ic)
+            l == "Shift" -> shift = !shift
+            l == "Caps" -> caps = !caps
+            l == "Ctrl" || l == "Win" || l == "Alt" || l == "Fn" || l == "Menu" -> {}
+            // Letters, and symbol keys hit by mistake in the middle of a word, go to the decoder.
+            auto && (isLetter || (!decoder.isEmpty() && l in wordSymbols)) -> {
+                if (decoder.isEmpty()) capFirst = shift
+                decoder.add(t)
                 shift = false
+                showGuess(ic)
+            }
+            else -> {
+                finishWord(ic)
+                when (l) {
+                    "Space" -> ic.commitText(" ", 1)
+                    "Enter" -> sendKeyChar('\n')
+                    "Tab" -> ic.commitText("\t", 1)
+                    else -> {
+                        val out = if (isLetter) {
+                            if (shift xor caps) l.uppercase() else l.lowercase()
+                        } else {
+                            if (shift) shifted[l] ?: l else l
+                        }
+                        ic.commitText(out, 1)
+                        shift = false
+                    }
+                }
             }
         }
         updateBar()
+    }
+
+    /** Backspace: inside a word, drop the last tap and re-guess; otherwise delete a character. */
+    private fun deleteBack(ic: android.view.inputmethod.InputConnection) {
+        if (!decoder.isEmpty()) {
+            decoder.removeLast()
+            if (decoder.isEmpty()) {
+                ic.setComposingText("", 1)
+                ic.finishComposingText()
+                resetWord()
+            } else showGuess(ic)
+        } else backspace()
+    }
+
+    /** Show autocorrect's current best guess, underlined, in the text field. */
+    private fun showGuess(ic: android.view.inputmethod.InputConnection) {
+        val w = decoder.best(Engine.board, Engine.fingerZones)
+        val shown = when {
+            caps -> w.uppercase()
+            capFirst -> w.replaceFirstChar { it.uppercase() }
+            else -> w
+        }
+        Engine.composing = shown
+        ic.setComposingText(shown, 1)
+    }
+
+    private fun finishWord(ic: android.view.inputmethod.InputConnection) {
+        if (!decoder.isEmpty()) ic.finishComposingText()
+        resetWord()
+    }
+
+    private fun resetWord() {
+        decoder.clear()
+        capFirst = false
+        Engine.composing = ""
     }
 
     private fun backspace() {
