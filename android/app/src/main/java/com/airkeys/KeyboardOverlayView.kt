@@ -84,10 +84,41 @@ class KeyboardOverlayView(ctx: Context, startEditable: Boolean) : View(ctx) {
             text.clearShadowLayer()
             c.drawText(Engine.status, width / 2f, height / 2f, text)
         }
-        if (Engine.corners == null) return
-        drawKeys(c)
-        drawHands(c)
-        if (editable) drawHandles(c)
+        if (Engine.corners != null) {
+            drawKeys(c)
+            drawHands(c)
+            if (editable) drawHandles(c)
+        }
+        if (Engine.calibrating || SystemClock.uptimeMillis() - Engine.calibDoneAt < 2000L) {
+            drawCalibration(c)
+            if (Engine.calibrating) postInvalidateDelayed(100)
+        }
+    }
+
+    /** Banner with the hold-still prompt and a progress bar. */
+    private fun drawCalibration(c: Canvas) {
+        val w = width.toFloat()
+        val bandH = 46f * density
+        fill.color = 0xE60E1116.toInt()
+        c.drawRect(0f, 0f, w, bandH, fill)
+
+        val msg = Engine.calibMessage
+        text.clearShadowLayer()
+        text.color = if (Engine.calibrating) Color.WHITE else accent
+        var size = 15f * density
+        text.textSize = size
+        while (text.measureText(msg) > w - 16f * density && size > 9f * density) {
+            size -= 0.5f * density
+            text.textSize = size
+        }
+        c.drawText(msg, w / 2f, bandH / 2f - 2f * density - (text.descent() + text.ascent()) / 2f, text)
+
+        val barH = 5f * density
+        fill.color = 0xFF2B313C.toInt()
+        c.drawRect(0f, bandH - barH, w, bandH, fill)
+        fill.color = accent
+        val p = if (Engine.calibrating) Engine.calibProgress else 1f
+        c.drawRect(0f, bandH - barH, w * p, bandH, fill)
     }
 
     private fun keyQuad(u0: Float, v0: Float, u1: Float, v1: Float) {

@@ -12,6 +12,7 @@ import android.view.View
 import android.view.ViewGroup
 import android.view.WindowManager
 import android.widget.FrameLayout
+import android.widget.LinearLayout
 import android.widget.TextView
 
 /**
@@ -89,7 +90,7 @@ class FloatingWindow(private val ctx: Context) {
             true
         }
 
-        // Typing on/off.
+        // Typing on/off + fit-to-hands, top left.
         val typing = pill("")
         typingLabel = typing
         updateTypingLabel()
@@ -98,9 +99,20 @@ class FloatingWindow(private val ctx: Context) {
             Engine.save()
             updateTypingLabel()
         }
-        frame.addView(typing, FrameLayout.LayoutParams(
-            ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.TOP or Gravity.START
-        ).apply { setMargins((6 * d).toInt(), (6 * d).toInt(), 0, 0) })
+        val fit = pill("✋")
+        fit.setOnClickListener {
+            if (Engine.calibrating) Engine.cancelCalibration() else Engine.startCalibration()
+        }
+        val pills = LinearLayout(ctx).apply {
+            orientation = LinearLayout.HORIZONTAL
+            addView(typing)
+            addView(fit, LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { setMargins((6 * d).toInt(), 0, 0, 0) })
+        }
+        frame.addView(pills, FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM or Gravity.START
+        ).apply { setMargins((6 * d).toInt(), 0, 0, (6 * d).toInt()) })
 
         // Close (hides the window; the camera keeps running until stopped).
         val close = pill("✕")

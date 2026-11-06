@@ -53,6 +53,7 @@ class MainActivity : ComponentActivity() {
     private lateinit var overlay: KeyboardOverlayView
     private lateinit var btnSetup: Button
     private lateinit var btnAdjust: Button
+    private lateinit var btnFit: Button
     private lateinit var btnTypingTop: Button
     private lateinit var btnCamera: Button
     private lateinit var btnOverlay: Button
@@ -102,6 +103,10 @@ class MainActivity : ComponentActivity() {
             setPadding(px(4), 0, px(4), 0)
         }
         topBar.addView(status, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        btnFit = smallButton("✋ Fit") {
+            if (Engine.calibrating) Engine.cancelCalibration() else fitToHands()
+            refresh()
+        }
         btnAdjust = smallButton("✥ Adjust") {
             overlay.editable = !overlay.editable
             refresh()
@@ -115,6 +120,7 @@ class MainActivity : ComponentActivity() {
             showSetup = !showSetup
             applyMode()
         }
+        topBar.addView(btnFit)
         topBar.addView(btnAdjust)
         topBar.addView(btnTypingTop)
         topBar.addView(btnSetup)
@@ -175,9 +181,10 @@ class MainActivity : ComponentActivity() {
         })
 
         panel.addView(TextView(this).apply {
-            text = "Tap ✥ Adjust, then drag the corners so the keyboard sits where your hands rest " +
-                "(drag the middle to move it). For typing, put Air Keys in split screen next to " +
-                "another app — it switches to full view automatically."
+            text = "Tap ✋ Fit, rest your fingers on the home row (A S D F · J K L ;) with thumbs on " +
+                "the space bar, and hold still for 4 seconds — the keyboard lines itself up with " +
+                "your hands. ✥ Adjust lets you fine-tune the corners by hand. For typing, put " +
+                "Air Keys in split screen next to another app; it switches to full view automatically."
             textSize = 12f
             setTextColor(0xFF9AA3AF.toInt())
             setPadding(0, px(4), 0, px(4))
@@ -282,7 +289,19 @@ class MainActivity : ComponentActivity() {
     private fun startTracking() {
         if (!hasCamera()) { requestCamera(); return }
         ContextCompat.startForegroundService(this, Intent(this, CameraService::class.java))
+        if (!Engine.calibratedOnce) Engine.startCalibration()
+        // So your normal keyboard doesn't pop up while typing with the camera.
+        if (imeEnabled() && !imeSelected()) ui.postDelayed({ imm().showInputMethodPicker() }, 600)
         ui.postDelayed({ refresh() }, 800)
+    }
+
+    private fun fitToHands() {
+        overlay.editable = false
+        if (!Engine.running) {
+            if (!hasCamera()) { requestCamera(); return }
+            ContextCompat.startForegroundService(this, Intent(this, CameraService::class.java))
+        }
+        Engine.startCalibration()
     }
 
     private fun stopTracking() {
@@ -318,6 +337,8 @@ class MainActivity : ComponentActivity() {
         btnFlip.text = if (Engine.flipped) "⇅ Flipped" else "⇅ Flip"
         btnRows.text = if (Engine.board.numbers) "123 row: on" else "123 row: off"
         btnWindow.text = if (Engine.showWindow) "Window: on" else "Window: off"
+        btnFit.text = if (Engine.calibrating) "✕ Cancel" else "✋ Fit"
+        btnFit.setTextColor(if (Engine.calibrating) 0xFF5EEAD4.toInt() else Color.WHITE)
         btnAdjust.text = if (overlay.editable) "✓ Done" else "✥ Adjust"
         btnAdjust.setTextColor(if (overlay.editable) 0xFF5EEAD4.toInt() else Color.WHITE)
         btnTypingTop.text = if (Engine.typingEnabled) "⌨ On" else "⌨ Off"
@@ -338,7 +359,9 @@ class MainActivity : ComponentActivity() {
             Engine.lastPressed?.let { parts.add("last: ${it.label}") }
         }
         if (overlay.editable) parts.add("drag the corners")
+        if (!Engine.calibratedOnce && Engine.running && !Engine.calibrating) parts.add("tap ✋ Fit to line up the keyboard")
         status.text = parts.joinToString("  ·  ")
+        btnFit.text = if (Engine.calibrating) "✕ Cancel" else "✋ Fit"
         btnStart.text = if (Engine.running) "■ Stop camera" else "▶ Start camera"
         if (Engine.running) window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         else window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)

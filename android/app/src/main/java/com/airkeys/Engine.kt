@@ -4,12 +4,19 @@ import android.content.Context
 import android.content.SharedPreferences
 import android.graphics.Bitmap
 import android.graphics.PointF
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.os.VibrationEffect
+import android.os.Vibrator
+import android.os.VibratorManager
 import java.util.concurrent.CopyOnWriteArraySet
+import kotlin.math.atan2
+import kotlin.math.cos
 import kotlin.math.hypot
 import kotlin.math.max
 import kotlin.math.min
+import kotlin.math.sin
 
 /**
  * Shared state between the camera service, the floating window, the setup screen
@@ -38,7 +45,15 @@ object Engine {
     @Volatile var frame: Bitmap? = null
     @Volatile var aspect = 4f / 3f
     @Volatile var hands: List<Hand> = emptyList()
+    /** Fired on the main thread when the camera starts or stops. */
+    val stateListeners = CopyOnWriteArraySet<() -> Unit>()
+
     @Volatile var running = false
+        set(value) {
+            val changed = field != value
+            field = value
+            if (changed) main.post { for (l in stateListeners) l() }
+        }
     @Volatile var modelReady = false
     @Volatile var status = "Camera off"
     @Volatile var homeCount = -1
@@ -51,6 +66,7 @@ object Engine {
     @Volatile var flipped = true
     @Volatile var sensitivity = 5          // 1..10
     @Volatile var showWindow = true
+    @Volatile var calibratedOnce = false
     @Volatile var board = Board(true)
         private set
     @Volatile var corners: FloatArray? = null
@@ -76,6 +92,7 @@ object Engine {
         sensitivity = p.getInt("sens", 5)
         showWindow = p.getBoolean("window", true)
         typingEnabled = p.getBoolean("typing", true)
+        calibratedOnce = p.getBoolean("calibrated", false)
         board = Board(p.getBoolean("numbers", true))
         val c = p.getString("corners", null)
             ?.split(",")?.mapNotNull { it.toFloatOrNull() }
@@ -95,6 +112,7 @@ object Engine {
             .putInt("sens", sensitivity)
             .putBoolean("window", showWindow)
             .putBoolean("typing", typingEnabled)
+            .putBoolean("calibrated", calibratedOnce)
             .putBoolean("numbers", board.numbers)
             .putString("corners", corners?.joinToString(","))
             .apply()
@@ -275,7 +293,184 @@ object Engine {
         }
         hands = out
         homeCount = if (seen) home else -1
+        if (calibrating) calibrateStep(raw, now)
         for (l in frameListeners) l()
+    }
+
+    // ------------------------------------------------------------------ calibration
+
+    /** Keyboard-unit centers of A S D F J K L ; */
+    private val HOME_U = floatArrayOf(2.25f, 3.25f, 4.25f, 5.25f, 8.25f, 9.25f, 10.25f, 11.25f)
+    private const val CALIB_MS = 4000L
+
+    @Volatile var calibrating = false
+        private set
+    @Volatile var calibProgress = 0f
+        private set
+    @Volatile var calibMessage = ""
+        private set
+    @Volatile var calibDoneAt = 0L
+        private set
+    @Volatile private var calibReset = false
+    private val calibSamples = ArrayList<FloatArray>()
+    private var stillSince = 0L
+
+    /** Start "rest your hands on the home row and hold still for 4 seconds". */
+    fun startCalibration() {
+        calibReset = true
+        calibProgress = 0f
+        calibMessage = "Rest fingers on A S D F · J K L ; and thumbs on space, then hold still"
+        calibrating = true
+        for (l in frameListeners) l()
+    }
+
+    fun cancelCalibration() {
+        calibrating = false
+        calibProgress = 0f
+        calibMessage = ""
+        for (l in frameListeners) l()
+    }
+
+    /**
+     * Collects fingertip positions while both hands hold still. Sample layout (x scaled by
+     * aspect so distances are square): 0-3 left pinky..index, 4-7 right index..pinky,
+     * 8 left thumb, 9 right thumb, 10 left wrist, 11 right wrist.
+     */
+    private fun calibrateStep(raw: List<FloatArray>, now: Long) {
+        if (calibReset) {
+            calibSamples.clear(); stillSince = now; calibReset = false
+        }
+        if (raw.size < 2) {
+            calibSamples.clear(); stillSince = now; calibProgress = 0f
+            calibMessage = if (raw.isEmpty()) "Show both hands to the camera" else "I can only see one hand — show both"
+            return
+        }
+        // On screen, your left hand is on the left (front camera view is mirrored).
+        val pair = raw.take(2).sortedBy { it[0] }
+        val l = pair[0]
+        val r = pair[1]
+        val s = FloatArray(24)
+        var k = 0
+        for (f in intArrayOf(4, 3, 2, 1)) { s[k++] = contactX(l, f) * aspect; s[k++] = contactY(l, f) }
+        for (f in intArrayOf(1, 2, 3, 4)) { s[k++] = contactX(r, f) * aspect; s[k++] = contactY(r, f) }
+        s[k++] = contactX(l, 0) * aspect; s[k++] = contactY(l, 0)
+        s[k++] = contactX(r, 0) * aspect; s[k++] = contactY(r, 0)
+        s[k++] = l[0] * aspect; s[k++] = l[1]
+        s[k++] = r[0] * aspect; s[k] = r[1]
+
+        val tol = 0.12f * (handSize(l) + handSize(r)) / 2f
+        if (calibSamples.isEmpty()) {
+            stillSince = now
+        } else {
+            val mean = meanOf(calibSamples)
+            for (i in 0 until 10) {
+                if (hypot(s[i * 2] - mean[i * 2], s[i * 2 + 1] - mean[i * 2 + 1]) > tol) {
+                    calibSamples.clear(); stillSince = now; break
+                }
+            }
+        }
+        calibSamples.add(s)
+
+        val held = now - stillSince
+        calibProgress = (held.toFloat() / CALIB_MS).coerceIn(0f, 1f)
+        val secs = ((CALIB_MS - held) / 1000L + 1L).coerceIn(1L, 4L)
+        calibMessage = if (held < 250L) "Fingers on A S D F · J K L ; — hold still" else "Hold still… $secs"
+        if (held >= CALIB_MS) finishCalibration(meanOf(calibSamples), now)
+    }
+
+    private fun meanOf(list: List<FloatArray>): FloatArray {
+        val m = FloatArray(24)
+        for (a in list) for (i in 0 until 24) m[i] += a[i]
+        for (i in 0 until 24) m[i] /= list.size.toFloat()
+        return m
+    }
+
+    /** Fit the keyboard so A S D F / J K L ; sit under the fingers and space under the thumbs. */
+    private fun finishCalibration(m: FloatArray, now: Long) {
+        // Line through the 8 fingertips (principal direction).
+        var cx = 0f
+        var cy = 0f
+        for (i in 0 until 8) { cx += m[i * 2]; cy += m[i * 2 + 1] }
+        cx /= 8f; cy /= 8f
+        var sxx = 0f; var syy = 0f; var sxy = 0f
+        for (i in 0 until 8) {
+            val ex = m[i * 2] - cx
+            val ey = m[i * 2 + 1] - cy
+            sxx += ex * ex; syy += ey * ey; sxy += ex * ey
+        }
+        val ang = 0.5f * atan2(2f * sxy, sxx - syy)
+        var dx = cos(ang)
+        var dy = sin(ang)
+        // Point from your left pinky toward your right pinky.
+        if ((m[14] - m[0]) * dx + (m[15] - m[1]) * dy < 0f) { dx = -dx; dy = -dy }
+
+        // Key spacing along the row: least squares of position vs. key column.
+        val t = FloatArray(8) { i -> (m[i * 2] - cx) * dx + (m[i * 2 + 1] - cy) * dy }
+        val mu = HOME_U.average().toFloat()
+        val mt = t.average().toFloat()
+        var cov = 0f
+        var varU = 0f
+        for (i in 0 until 8) {
+            cov += (HOME_U[i] - mu) * (t[i] - mt)
+            varU += (HOME_U[i] - mu) * (HOME_U[i] - mu)
+        }
+        val su = cov / varU
+        if (su <= 0f) {
+            calibMessage = "Couldn't read your hands — try again"
+            calibSamples.clear(); stillSince = now
+            return
+        }
+        val a = mt - su * mu
+
+        // Across the row: toward your wrists is toward the space bar.
+        var nx = -dy
+        var ny = dx
+        val wx = (m[20] + m[22]) / 2f - cx
+        val wy = (m[21] + m[23]) / 2f - cy
+        if (wx * nx + wy * ny < 0f) { nx = -nx; ny = -ny }
+
+        val homeIdx = if (board.numbers) 2 else 1
+        val homeV = homeIdx + 0.5f
+        val spaceGap = (board.rows - 0.5f) - homeV
+        val tx = (m[16] + m[18]) / 2f - cx
+        val ty = (m[17] + m[19]) / 2f - cy
+        var sv = (tx * nx + ty * ny) / spaceGap
+        if (sv < 0.3f * su || sv > 1.3f * su) sv = su * (if (frontCamera) 0.55f else 0.95f)
+
+        fun pt(u: Float, v: Float): PointF {
+            val along = a + su * u
+            val across = (v - homeV) * sv
+            return PointF((cx + along * dx + across * nx) / aspect, cy + along * dy + across * ny)
+        }
+        val rowsF = board.rows.toFloat()
+        val tl = pt(0f, 0f)
+        val tr = pt(Board.COLS, 0f)
+        val br = pt(Board.COLS, rowsF)
+        val bl = pt(0f, rowsF)
+        setCorners(floatArrayOf(tl.x, tl.y, tr.x, tr.y, br.x, br.y, bl.x, bl.y))
+        flipped = ny < 0f
+        calibratedOnce = true
+        save()
+
+        calibrating = false
+        calibProgress = 1f
+        calibDoneAt = now
+        calibMessage = "Keyboard fitted to your hands ✓"
+        states.values.forEach { arr -> arr.forEach { it.reset() } }
+        main.post { vibrate() }
+    }
+
+    private fun vibrate() {
+        val ctx = appCtx ?: return
+        try {
+            val v: Vibrator? = if (Build.VERSION.SDK_INT >= 31) {
+                ctx.getSystemService(VibratorManager::class.java)?.defaultVibrator
+            } else {
+                ctx.getSystemService(Vibrator::class.java)
+            }
+            v?.vibrate(VibrationEffect.createOneShot(90L, VibrationEffect.DEFAULT_AMPLITUDE))
+        } catch (_: Exception) {
+        }
     }
 
     /**
@@ -325,6 +520,7 @@ object Engine {
     }
 
     private fun emit(k: Key, now: Long) {
+        if (calibrating) return
         lastPressed = k
         lastPressedAt = now
         if (!typingEnabled) return

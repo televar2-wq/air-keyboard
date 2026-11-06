@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.Intent
 import android.graphics.Color
 import android.inputmethodservice.InputMethodService
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.view.Gravity
@@ -17,8 +18,10 @@ import android.widget.LinearLayout
 import android.widget.TextView
 
 /**
- * The system keyboard. Its own panel is a slim bar with status and a few
- * fallback buttons; the real typing comes from taps the camera detects.
+ * The system keyboard. While the camera is running it shows no panel at all
+ * (so nothing covers the app you're typing in) and types the taps the camera
+ * detects. When the camera is off it shows a slim bar with status and a few
+ * buttons, and when the camera stops it hands back to your previous keyboard.
  */
 class AirKeyboardIme : InputMethodService() {
 
@@ -31,6 +34,18 @@ class AirKeyboardIme : InputMethodService() {
     private var d = 1f
 
     private val listener: (Key) -> Unit = { onAirKey(it) }
+
+    private val stateListener: () -> Unit = {
+        if (Engine.running) {
+            updateInputViewShown()
+            requestHideSelf(0)
+        } else {
+            // Camera stopped: go back to the keyboard you used before.
+            val switched = Build.VERSION.SDK_INT >= 28 &&
+                try { switchToPreviousInputMethod() } catch (_: Exception) { false }
+            if (!switched) updateInputViewShown()
+        }
+    }
 
     private val tick = object : Runnable {
         override fun run() {
@@ -49,11 +64,13 @@ class AirKeyboardIme : InputMethodService() {
         super.onCreate()
         Engine.load(this)
         Engine.keyListeners.add(listener)
+        Engine.stateListeners.add(stateListener)
         d = resources.displayMetrics.density
     }
 
     override fun onDestroy() {
         Engine.keyListeners.remove(listener)
+        Engine.stateListeners.remove(stateListener)
         ui.removeCallbacks(tick)
         super.onDestroy()
     }
@@ -100,6 +117,14 @@ class AirKeyboardIme : InputMethodService() {
         updateBar()
         return root
     }
+
+    /** No on-screen panel while the camera keyboard is active. */
+    override fun onEvaluateInputViewShown(): Boolean {
+        super.onEvaluateInputViewShown()
+        return !Engine.running
+    }
+
+    override fun onEvaluateFullscreenMode(): Boolean = false
 
     override fun onStartInputView(info: EditorInfo?, restarting: Boolean) {
         super.onStartInputView(info, restarting)
