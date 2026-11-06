@@ -312,14 +312,18 @@ object Engine {
     @Volatile var calibDoneAt = 0L
         private set
     @Volatile private var calibReset = false
-    private val calibSamples = ArrayList<FloatArray>()
-    private var stillSince = 0L
+    private var calibSum = FloatArray(24)
+    private var calibCount = 0
+    private var calibHeld = 0L          // ms of "steady enough" time banked so far
+    private var calibLastT = 0L
+    private var lastBothHands = 0L
+    private var calibSmooth: FloatArray? = null
 
-    /** Start "rest your hands on the home row and hold still for 4 seconds". */
+    /** Start "rest your hands on the home row and hold steady for 4 seconds". */
     fun startCalibration() {
         calibReset = true
         calibProgress = 0f
-        calibMessage = "Rest fingers on A S D F · J K L ; and thumbs on space, then hold still"
+        calibMessage = "Rest fingers on A S D F · J K L ; and thumbs on space, then hold steady"
         calibrating = true
         for (l in frameListeners) l()
     }
@@ -331,20 +335,43 @@ object Engine {
         for (l in frameListeners) l()
     }
 
+    private fun resetCalib() {
+        calibSum = FloatArray(24)
+        calibCount = 0
+        calibHeld = 0L
+        calibSmooth = null
+    }
+
     /**
-     * Collects fingertip positions while both hands hold still. Sample layout (x scaled by
-     * aspect so distances are square): 0-3 left pinky..index, 4-7 right index..pinky,
-     * 8 left thumb, 9 right thumb, 10 left wrist, 11 right wrist.
+     * Collects fingertip positions while both hands stay roughly steady.
+     *
+     * Forgiving on purpose (people bump tables):
+     *  - a shared shift of all fingers (phone or table wobble) is ignored;
+     *  - 6 of the 8 fingers being in place is enough;
+     *  - a wobbly moment rewinds the countdown instead of restarting it;
+     *  - losing a hand for under a second just pauses.
+     *
+     * Sample layout (x scaled by aspect so distances are square): 0-3 left pinky..index,
+     * 4-7 right index..pinky, 8 left thumb, 9 right thumb, 10 left wrist, 11 right wrist.
      */
     private fun calibrateStep(raw: List<FloatArray>, now: Long) {
         if (calibReset) {
-            calibSamples.clear(); stillSince = now; calibReset = false
+            resetCalib(); calibLastT = now; lastBothHands = now; calibReset = false
         }
+        val dt = (now - calibLastT).coerceIn(0L, 200L)
+        calibLastT = now
+
         if (raw.size < 2) {
-            calibSamples.clear(); stillSince = now; calibProgress = 0f
-            calibMessage = if (raw.isEmpty()) "Show both hands to the camera" else "I can only see one hand — show both"
+            if (now - lastBothHands > 900L) {
+                calibHeld = max(0L, calibHeld - dt)
+                if (calibHeld == 0L) resetCalib()
+                calibMessage = if (raw.isEmpty()) "Show both hands to the camera" else "I can only see one hand — show both"
+            }
+            calibProgress = (calibHeld.toFloat() / CALIB_MS).coerceIn(0f, 1f)
             return
         }
+        lastBothHands = now
+
         // On screen, your left hand is on the left (front camera view is mirrored).
         val pair = raw.take(2).sortedBy { it[0] }
         val l = pair[0]
@@ -358,31 +385,58 @@ object Engine {
         s[k++] = l[0] * aspect; s[k++] = l[1]
         s[k++] = r[0] * aspect; s[k] = r[1]
 
-        val tol = 0.12f * (handSize(l) + handSize(r)) / 2f
-        if (calibSamples.isEmpty()) {
-            stillSince = now
+        // Smooth out tracking jitter.
+        val prev = calibSmooth
+        if (prev != null) for (i in 0 until 24) s[i] = prev[i] * 0.5f + s[i] * 0.5f
+        calibSmooth = s.copyOf()
+
+        val hs = (handSize(l) + handSize(r)) / 2f
+        var steady = true
+        if (calibCount > 0) {
+            val n = calibCount.toFloat()
+            // Shared shift of all fingertips = the phone/table moved, not your fingers.
+            var shx = 0f
+            var shy = 0f
+            for (i in 0 until 8) {
+                shx += s[i * 2] - calibSum[i * 2] / n
+                shy += s[i * 2 + 1] - calibSum[i * 2 + 1] / n
+            }
+            shx /= 8f; shy /= 8f
+            var ok = 0
+            for (i in 0 until 8) {
+                val ex = s[i * 2] - calibSum[i * 2] / n - shx
+                val ey = s[i * 2 + 1] - calibSum[i * 2 + 1] / n - shy
+                if (hypot(ex, ey) < 0.3f * hs) ok++
+            }
+            steady = ok >= 6 && hypot(shx, shy) < 0.8f * hs
+        }
+
+        if (steady) {
+            for (i in 0 until 24) calibSum[i] += s[i]
+            calibCount++
+            calibHeld += dt
         } else {
-            val mean = meanOf(calibSamples)
-            for (i in 0 until 10) {
-                if (hypot(s[i * 2] - mean[i * 2], s[i * 2 + 1] - mean[i * 2 + 1]) > tol) {
-                    calibSamples.clear(); stillSince = now; break
-                }
+            calibHeld = max(0L, calibHeld - dt)
+            if (calibHeld == 0L) {
+                // Hands have settled somewhere new: start averaging from here.
+                resetCalib()
+                for (i in 0 until 24) calibSum[i] = s[i]
+                calibCount = 1
+                calibSmooth = s.copyOf()
             }
         }
-        calibSamples.add(s)
 
-        val held = now - stillSince
-        calibProgress = (held.toFloat() / CALIB_MS).coerceIn(0f, 1f)
-        val secs = ((CALIB_MS - held) / 1000L + 1L).coerceIn(1L, 4L)
-        calibMessage = if (held < 250L) "Fingers on A S D F · J K L ; — hold still" else "Hold still… $secs"
-        if (held >= CALIB_MS) finishCalibration(meanOf(calibSamples), now)
-    }
-
-    private fun meanOf(list: List<FloatArray>): FloatArray {
-        val m = FloatArray(24)
-        for (a in list) for (i in 0 until 24) m[i] += a[i]
-        for (i in 0 until 24) m[i] /= list.size.toFloat()
-        return m
+        calibProgress = (calibHeld.toFloat() / CALIB_MS).coerceIn(0f, 1f)
+        val secs = ((CALIB_MS - calibHeld) / 1000L + 1L).coerceIn(1L, 4L)
+        calibMessage = when {
+            !steady -> "Hold steady…"
+            calibHeld < 250L -> "Fingers on A S D F · J K L ; — hold steady"
+            else -> "Hold steady… $secs"
+        }
+        if (calibHeld >= CALIB_MS && calibCount > 0) {
+            val mean = FloatArray(24) { i -> calibSum[i] / calibCount }
+            finishCalibration(mean, now)
+        }
     }
 
     /** Fit the keyboard so A S D F / J K L ; sit under the fingers and space under the thumbs. */
@@ -417,7 +471,7 @@ object Engine {
         val su = cov / varU
         if (su <= 0f) {
             calibMessage = "Couldn't read your hands — try again"
-            calibSamples.clear(); stillSince = now
+            resetCalib()
             return
         }
         val a = mt - su * mu
