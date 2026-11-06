@@ -119,7 +119,7 @@ object Engine {
         loaded = true
         // Older setups were fitted at normal key height: make the keys taller once.
         if (rs <= 0f) {
-            if (corners != null) setRowScale(1.3f) else { rowScale = 1.3f; save() }
+            if (corners != null) applyRowScale(1.3f) else { rowScale = 1.3f; save() }
         }
     }
 
@@ -147,7 +147,7 @@ object Engine {
     fun homeRowV(): Float = (if (board.numbers) 2 else 1) + 0.5f
 
     /** Make rows taller/shorter around the home row (keys stay under resting fingers). */
-    fun setRowScale(newScale: Float) {
+    fun applyRowScale(newScale: Float) {
         val ns = newScale.coerceIn(1f, 1.8f)
         val c = corners
         if (c != null && h != null && kotlin.math.abs(ns - rowScale) > 1e-3f) {

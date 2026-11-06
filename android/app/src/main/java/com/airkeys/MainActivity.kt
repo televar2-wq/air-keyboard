@@ -198,7 +198,7 @@ class MainActivity : ComponentActivity() {
             setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
                 override fun onProgressChanged(s: SeekBar?, p: Int, fromUser: Boolean) {
                     heightLabel.text = "Key height: ${100 + p * 5}%"
-                    if (fromUser) Engine.setRowScale(1f + p * 0.05f)
+                    if (fromUser) Engine.applyRowScale(1f + p * 0.05f)
                 }
                 override fun onStartTrackingTouch(s: SeekBar?) {}
                 override fun onStopTrackingTouch(s: SeekBar?) {}
