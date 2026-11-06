@@ -15,6 +15,11 @@ android {
         targetSdk = 34
         versionCode = buildNumber
         versionName = "0.1.$buildNumber"
+        // Galaxy Fold 6 (and nearly every current phone) is 64-bit ARM; skipping the rest
+        // keeps the APK small.
+        ndk {
+            abiFilters += listOf("arm64-v8a")
+        }
     }
 
     // A fixed key so each new build installs over the previous one.
