@@ -73,7 +73,7 @@ object Engine {
     // ---- settings ----
     @Volatile var frontCamera = true
     @Volatile var flipped = true
-    @Volatile var sensitivity = 5          // 1..10
+    @Volatile var sensitivity = 4          // 1..10
     @Volatile var rowScale = 1.3f          // key height, 1.0 = normal keyboard proportions
     @Volatile var fingerZones = true       // touch-typing assist
     @Volatile var followHands = true       // slowly re-center the keyboard under resting hands
@@ -102,7 +102,7 @@ object Engine {
         val p = prefs() ?: return
         frontCamera = p.getBoolean("front", true)
         flipped = p.getBoolean("flipped", true)
-        sensitivity = p.getInt("sens", 5)
+        sensitivity = p.getInt("sens", 4)
         showWindow = p.getBoolean("window", true)
         typingEnabled = p.getBoolean("typing", true)
         calibratedOnce = p.getBoolean("calibrated", false)
@@ -246,6 +246,13 @@ object Engine {
         var startS = 0f
         var startT = 0L
         var cooldownUntil = 0L
+        var rest = 0f            // "finger on the desk" level of the signal
+        var warmUntil = 0L       // ignore taps right after a hand (re)appears
+        var downFrames = 0
+        var s2 = 0f              // signal two frames ago
+        var liftFrames = 0       // consecutive frames the finger has been lifted
+        var liftAtStart = 0
+        var maxStep = 0f         // biggest single-frame drop during this tap
 
         fun reset() {
             smoothValid = false; valid = false; phase = 0; vel = 0f
@@ -319,6 +326,7 @@ object Engine {
             val handFast = (trackOf[p]?.fastUntil ?: 0L) > now
             var bestKey: Key? = null
             var bestTravel = 0f
+            var fired = 0
             val tips = Array(5) { f ->
                 val fs = st[f]
                 val cx = contactX(p, f)
@@ -332,6 +340,7 @@ object Engine {
                 val kb = normToKb(fs.sx, fs.sy)
                 val key = if (kb != null) board.keyAt(kb.x, kb.y) else null
                 val travel = updateTap(fs, p, f, hs, now)
+                if (travel > 0f) fired++
                 if (travel > bestTravel && !handFast) {
                     val tapKey = if (fingerZones && kb != null) board.resolve(side, f, kb.x, kb.y) else key
                     if (tapKey != null) { bestTravel = travel; bestKey = tapKey }
@@ -341,7 +350,9 @@ object Engine {
             val homeLabels = if (side == 'L') HOME_L else HOME_R
             for (f in 1..4) if (tips[f].key?.label == homeLabels[f]) home++
             out.add(Hand(side, p, tips))
-            bestKey?.let { emit(it, now) }
+            // Several fingers "tapping" at once is the whole hand moving or a tracking glitch.
+            val dropping = fired + st.count { it.phase == 1 }
+            if (dropping < 3) bestKey?.let { emit(it, now) }
         }
         hands = out
         homeCount = if (seen) home else -1
@@ -688,9 +699,16 @@ object Engine {
     /**
      * Tap detector for one finger. The signal is how far the fingertip has dropped
      * relative to its own knuckle, scaled by hand size, so moving the whole hand
-     * doesn't count. A tap = a fast drop that then stops.
+     * doesn't count.
      *  - Desk-level camera (front): drop shows up as the tip moving down the image.
      *  - Overhead camera (rear): drop shows up as the tip moving away from the camera (z).
+     *
+     * A tap must be all of these, which is what keeps idle hands from typing:
+     *  - a fast drop spread over at least two frames, not one sudden jump (tracking glitch);
+     *  - a big enough drop;
+     *  - starting from a finger that was lifted for a couple of frames: a finger
+     *    resting on the desk can't tap;
+     *  - not within half a second of the hand coming into view.
      * Returns the travel of a detected tap, or 0.
      */
     private fun updateTap(fs: FingerState, p: FloatArray, f: Int, hs: Float, now: Long): Float {
@@ -699,30 +717,53 @@ object Engine {
         val s = if (frontCamera) (p[t * 3 + 1] - p[k * 3 + 1]) / hs
                 else (p[t * 3 + 2] - p[k * 3 + 2]) / hs
         if (!fs.valid) {
-            fs.s = s; fs.t = now; fs.vel = 0f; fs.phase = 0; fs.valid = true
+            fs.s = s; fs.s2 = s; fs.t = now; fs.vel = 0f; fs.phase = 0; fs.valid = true
+            fs.rest = s; fs.warmUntil = now + 500L; fs.liftFrames = 0
             return 0f
         }
         val dt = max(now - fs.t, 1L) / 1000f
         val v = (s - fs.s) / dt
-        val prevS = fs.s
-        fs.vel = fs.vel * 0.4f + v * 0.6f
+        val prev = fs.s
+        val prev2 = fs.s2
+        fs.vel = fs.vel * 0.5f + v * 0.5f
+        fs.s2 = prev
         fs.s = s
         fs.t = now
+        // Desk level = the lowest the fingertip has been lately; forgets slowly.
+        fs.rest = max(s, fs.rest - 0.04f * dt)
 
-        val thr = 2.4f * (1.6f - sensitivity * 0.1f)            // drop speed (hand-sizes per second)
-        val minTravel = 0.06f + (10 - sensitivity) * 0.008f     // how far the tip must drop
+        val sens = (sensitivity - 1).coerceIn(0, 9) / 9f          // 0 = strict … 1 = sensitive
+        val thr = 3.0f - 1.8f * sens                              // drop speed, hand-sizes per second
+        val minTravel = 0.20f - 0.10f * sens                      // drop size, hand-sizes
+        val minLift = 0.10f - 0.05f * sens                        // how far above the desk it must start
         when (fs.phase) {
-            0 -> if (now >= fs.cooldownUntil && fs.vel > thr) {
-                fs.phase = 1; fs.startS = prevS; fs.startT = now
+            0 -> {
+                val liftBefore = fs.liftFrames
+                fs.liftFrames = if (s < fs.rest - minLift) fs.liftFrames + 1 else 0
+                if (now >= fs.cooldownUntil && now >= fs.warmUntil && fs.vel > thr) {
+                    // The drop may have begun a frame before we noticed it.
+                    fs.phase = 1
+                    fs.startS = min(prev, prev2)
+                    fs.startT = now
+                    fs.maxStep = max(s - prev, prev - prev2)
+                    fs.downFrames = (if (v > thr * 0.4f) 1 else 0) + (if ((prev - prev2) / dt > thr * 0.4f) 1 else 0)
+                    fs.liftAtStart = max(liftBefore, fs.liftFrames)
+                }
             }
             1 -> {
+                if (v > thr * 0.4f) fs.downFrames++
+                fs.maxStep = max(fs.maxStep, s - prev)
                 if (now - fs.startT > 450L) {
                     fs.phase = 0
                 } else if (fs.vel < thr * 0.25f) {
                     fs.phase = 0
                     val travel = s - fs.startS
-                    if (travel > minTravel) {
-                        fs.cooldownUntil = now + 140L
+                    val ok = travel > minTravel &&          // big enough
+                        fs.downFrames >= 2 &&               // moved over 2+ frames
+                        fs.maxStep <= 0.75f * travel &&     // not one sudden tracking jump
+                        fs.liftAtStart >= 2                 // finger was lifted first
+                    if (ok) {
+                        fs.cooldownUntil = now + 150L
                         return travel
                     }
                 }
