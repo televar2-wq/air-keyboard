@@ -40,7 +40,10 @@ jobs:
             https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task
 
       - name: Build APK
-        run: gradle assembleDebug --no-daemon --stacktrace 2>&1 | tee ../build.log
+        shell: bash
+        run: |
+          set -o pipefail
+          gradle assembleDebug --no-daemon --stacktrace 2>&1 | tee ../build.log
 
       # Saves the log (and the APK when it worked) to the "build-output" branch,
       # so the result can be read without opening the Actions page.
