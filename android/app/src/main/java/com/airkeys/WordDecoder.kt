@@ -32,7 +32,8 @@ class WordDecoder {
         private const val ZONE_PENALTY = 1.2f     // letter belongs to a different finger
         private const val EXTRA_TAP = 4.5f        // a tap that wasn't meant (cost)
         private const val MISSED_TAP = 5.5f       // a letter with no tap (cost)
-        private const val UNKNOWN_WORD = 15f      // prior cost of a word not in the list
+        private const val UNKNOWN_WORD = 18f      // prior cost of a word not in the list
+        private const val SYMBOL_IN_WORD = 8f     // literal reading containing a stray symbol
         private const val INF = 1e9f
     }
 
@@ -96,7 +97,7 @@ class WordDecoder {
         var bestScore = UNKNOWN_WORD
         for (i in 0 until n) {
             val c = idx(lit.getOrNull(i) ?: ' ')
-            bestScore += if (c >= 0) cost[i][c] else EXTRA_TAP
+            bestScore += if (c >= 0) cost[i][c] else SYMBOL_IN_WORD
         }
 
         val minLen = max(1, n - 2)
