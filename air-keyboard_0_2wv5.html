@@ -1,0 +1,600 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0e1116">
+<title>Air Keyboard Aligner</title>
+<style>
+  :root {
+    --bg:#0e1116; --panel:#161a21; --panel2:#1d222b; --line:#2b313c;
+    --text:#e8ebf0; --dim:#9aa3af; --accent:#5eead4;
+    --good:#22c55e; --near:#f59e0b; --bad:#ef4444; --off:#3a414d;
+  }
+  * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  html, body { margin:0; height:100%; background:var(--bg); color:var(--text);
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  body { display:flex; flex-direction:column; height:100dvh; overflow:hidden;
+    padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left); }
+
+  /* ---------- top status ---------- */
+  #top { display:flex; align-items:center; gap:10px; padding:8px 10px; background:var(--panel);
+    border-bottom:1px solid var(--line); flex-wrap:wrap; }
+  #summary { font-weight:650; font-size:15px; min-width:120px; }
+  #summary small { display:block; font-weight:400; color:var(--dim); font-size:12px; }
+  #chips { display:flex; gap:4px; flex:1; justify-content:center; flex-wrap:nowrap; }
+  .chip-gap { width:10px; }
+  .chip { width:38px; border-radius:8px; background:var(--off); text-align:center; padding:3px 0 4px;
+    border-bottom:3px solid transparent; transition:background .12s; }
+  .chip b { display:block; font-size:16px; line-height:1.15; }
+  .chip span { display:block; font-size:10px; color:rgba(255,255,255,.75); min-height:12px; }
+  .chip.good { background:var(--good); } .chip.near { background:var(--near); } .chip.bad { background:var(--bad); }
+
+  /* ---------- stage ---------- */
+  #stage { flex:1; min-height:0; position:relative; display:flex; align-items:center; justify-content:center; background:#000; }
+  #view { max-width:100%; max-height:100%; display:block; touch-action:none; }
+  #video { position:absolute; width:1px; height:1px; opacity:0; pointer-events:none; }
+  #hint { position:absolute; left:50%; top:10px; transform:translateX(-50%); background:rgba(14,17,22,.82);
+    border:1px solid var(--line); padding:6px 12px; border-radius:999px; font-size:13px; color:var(--text);
+    pointer-events:none; white-space:nowrap; max-width:94%; overflow:hidden; text-overflow:ellipsis; }
+  #hint:empty { display:none; }
+
+  /* ---------- start / error overlay ---------- */
+  #overlay { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; padding:20px;
+    background:radial-gradient(ellipse at center, #182029 0%, #0b0d11 75%); z-index:5; overflow:auto; }
+  #overlay.hidden { display:none; }
+  .card { max-width:460px; width:100%; }
+  .card h1 { font-size:24px; margin:0 0 6px; letter-spacing:-.01em; }
+  .card p { color:var(--dim); margin:0 0 16px; line-height:1.45; font-size:14.5px; }
+  .choice { display:flex; gap:12px; align-items:center; width:100%; text-align:left; background:var(--panel2);
+    color:var(--text); border:1px solid var(--line); border-radius:14px; padding:14px; margin-bottom:10px;
+    font:inherit; cursor:pointer; }
+  .choice:active { transform:scale(.99); }
+  .choice:hover { border-color:var(--accent); }
+  .choice svg { flex:none; }
+  .choice b { display:block; font-size:15.5px; margin-bottom:2px; }
+  .choice span { color:var(--dim); font-size:13px; line-height:1.35; }
+  #err { color:#fca5a5; font-size:13.5px; line-height:1.45; margin-top:8px; white-space:pre-line; }
+
+  /* ---------- bottom controls ---------- */
+  #bar { display:flex; gap:6px; padding:8px 10px; background:var(--panel); border-top:1px solid var(--line);
+    overflow-x:auto; align-items:center; scrollbar-width:none; }
+  #bar::-webkit-scrollbar { display:none; }
+  #bar button, #bar label { flex:none; background:var(--panel2); color:var(--text); border:1px solid var(--line);
+    border-radius:10px; padding:9px 12px; font:inherit; font-size:13.5px; cursor:pointer; display:flex; align-items:center; gap:6px; }
+  #bar button.on { border-color:var(--accent); color:var(--accent); }
+  #bar input[type=range] { width:90px; accent-color:var(--accent); }
+  #model { flex:none; font-size:12px; color:var(--dim); padding:0 6px; white-space:nowrap; }
+</style>
+</head>
+<body>
+
+<div id="top">
+  <div id="summary">Home row —<small>Waiting for hands</small></div>
+  <div id="chips"></div>
+</div>
+
+<div id="stage">
+  <canvas id="view"></canvas>
+  <video id="video" playsinline muted autoplay></video>
+  <div id="hint"></div>
+
+  <div id="overlay">
+    <div class="card">
+      <h1>Air Keyboard Aligner</h1>
+      <p>Point your camera at your hands on a desk. A keyboard is drawn over the video; each fingertip lights up the key it would be on, and the bar at the top shows whether your fingers are on the home row (A S D F · J K L ;).</p>
+
+      <button class="choice" id="startFront">
+        <svg width="44" height="44" viewBox="0 0 44 44" fill="none" stroke="#5eead4" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="15" y="4" width="14" height="22" rx="3"/><circle cx="22" cy="8" r="1.4" fill="#5eead4"/>
+          <path d="M6 38h32M10 32l-4 6M34 32l4 6M10 32h24"/>
+        </svg>
+        <div><b>Phone stands in front of my hands</b>
+          <span>Front camera faces me across the desk. Mirrored view, keyboard drawn upside-down so it matches what the camera sees.</span></div>
+      </button>
+
+      <button class="choice" id="startRear">
+        <svg width="44" height="44" viewBox="0 0 44 44" fill="none" stroke="#5eead4" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="12" y="3" width="20" height="11" rx="2.5"/><circle cx="22" cy="14" r="1.4" fill="#5eead4"/>
+          <path d="M22 16v6M16 22l-2 3M28 22l2 3"/><path d="M6 38h32M10 31l-4 7M34 31l4 7M10 31h24"/>
+        </svg>
+        <div><b>Phone looks down from above / behind</b>
+          <span>Rear camera on a stand or over your shoulder, pointing at the desk. Normal view.</span></div>
+      </button>
+
+      <div id="err"></div>
+    </div>
+  </div>
+</div>
+
+<div id="bar">
+  <button id="btnEdit" class="on" title="Drag corners to fit the keyboard to your desk">✥ Adjust</button>
+  <button id="btnFlip" title="Swap the top and bottom of the keyboard">⇅ Flip</button>
+  <button id="btnMirror" title="Mirror the camera image">⇄ Mirror</button>
+  <button id="btnCam" title="Switch between front and rear camera">⟲ Camera</button>
+  <button id="btnRows" title="Show or hide the number row">1 2 3 row</button>
+  <label title="Keyboard opacity">◐ <input id="opacity" type="range" min="15" max="100" value="70"></label>
+  <button id="btnReset">Reset</button>
+  <button id="btnFull">⛶</button>
+  <span id="model">Hand model: not loaded</span>
+</div>
+
+<script type="module">
+/* =========================================================
+   Air Keyboard Aligner
+   - MediaPipe HandLandmarker (tasks-vision) for 21-point hand tracking
+   - A 15 x 5 key-unit keyboard mapped onto a user-adjustable quad
+     with a projective homography, so it can match desk perspective
+   ========================================================= */
+
+const TV = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14";
+const MODEL = "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task";
+
+/* ---------- keyboard layout (key units) ---------- */
+const NUM_ROW = [["`",1],["1",1],["2",1],["3",1],["4",1],["5",1],["6",1],["7",1],["8",1],["9",1],["0",1],["-",1],["=",1],["⌫",2]];
+const LETTER_ROWS = [
+  [["Tab",1.5],["Q",1],["W",1],["E",1],["R",1],["T",1],["Y",1],["U",1],["I",1],["O",1],["P",1],["[",1],["]",1],["\\",1.5]],
+  [["Caps",1.75],["A",1],["S",1],["D",1],["F",1],["G",1],["H",1],["J",1],["K",1],["L",1],[";",1],["'",1],["Enter",2.25]],
+  [["Shift",2.25],["Z",1],["X",1],["C",1],["V",1],["B",1],["N",1],["M",1],[",",1],[".",1],["/",1],["Shift",2.75]],
+  [["Ctrl",1.25],["Win",1.25],["Alt",1.25],["Space",6.25],["Alt",1.25],["Fn",1.25],["Menu",1.25],["Ctrl",1.25]],
+];
+const COLS = 15;
+
+let KEYS = [], NROWS = 0;
+function buildKeys(withNumbers) {
+  const rows = withNumbers ? [NUM_ROW, ...LETTER_ROWS] : LETTER_ROWS;
+  KEYS = []; NROWS = rows.length;
+  rows.forEach((row, r) => {
+    let u = 0;
+    row.forEach(([label, w], i) => { KEYS.push({ id: r + ":" + i, label, row: r, u0: u, u1: u + w }); u += w; });
+  });
+}
+function keyAt(u, v) {
+  if (u < 0 || v < 0 || u >= COLS || v >= NROWS) return null;
+  const r = Math.floor(v);
+  for (const k of KEYS) if (k.row === r && u >= k.u0 && u < k.u1) return k;
+  return null;
+}
+function keyByLabel(label) { return KEYS.find(k => k.label === label); }
+// distance (key units) from a point to a key's rectangle; 0 if inside
+function distToKey(u, v, k) {
+  const dx = Math.max(k.u0 - u, 0, u - k.u1);
+  const dy = Math.max(k.row - v, 0, v - (k.row + 1));
+  return Math.hypot(dx, dy);
+}
+
+/* ---------- fingers ---------- */
+const FINGERS = [
+  { name: "thumb",  tip: 4,  color: "#fb923c" },
+  { name: "index",  tip: 8,  color: "#60a5fa" },
+  { name: "middle", tip: 12, color: "#f472b6" },
+  { name: "ring",   tip: 16, color: "#facc15" },
+  { name: "pinky",  tip: 20, color: "#c084fc" },
+];
+const HOME = { L: { pinky: "A", ring: "S", middle: "D", index: "F", thumb: "Space" },
+               R: { index: "J", middle: "K", ring: "L", pinky: ";", thumb: "Space" } };
+const CHIP_ORDER = [["L","pinky"],["L","ring"],["L","middle"],["L","index"],null,["R","index"],["R","middle"],["R","ring"],["R","pinky"]];
+const HAND_LINKS = [[0,1],[1,2],[2,3],[3,4],[0,5],[5,6],[6,7],[7,8],[5,9],[9,10],[10,11],[11,12],[9,13],[13,14],[14,15],[15,16],[13,17],[17,18],[18,19],[19,20],[0,17]];
+
+/* ---------- homography: unit square <-> quad ---------- */
+// corners order: TL, TR, BR, BL  ->  (0,0) (1,0) (1,1) (0,1)
+function squareToQuad(p) {
+  const [p0, p1, p2, p3] = p;
+  const dx1 = p1.x - p2.x, dx2 = p3.x - p2.x, dx3 = p0.x - p1.x + p2.x - p3.x;
+  const dy1 = p1.y - p2.y, dy2 = p3.y - p2.y, dy3 = p0.y - p1.y + p2.y - p3.y;
+  const det = dx1 * dy2 - dx2 * dy1;
+  let g = 0, h = 0;
+  if (Math.abs(det) > 1e-12) { g = (dx3 * dy2 - dx2 * dy3) / det; h = (dx1 * dy3 - dx3 * dy1) / det; }
+  return [p1.x - p0.x + g * p1.x, p3.x - p0.x + h * p3.x, p0.x,
+          p1.y - p0.y + g * p1.y, p3.y - p0.y + h * p3.y, p0.y,
+          g, h, 1];
+}
+function applyH(m, x, y) {
+  const w = m[6] * x + m[7] * y + m[8];
+  return { x: (m[0] * x + m[1] * y + m[2]) / w, y: (m[3] * x + m[4] * y + m[5]) / w };
+}
+function invertH(m) {
+  const [a, b, c, d, e, f, g, h, i] = m;
+  const A = e * i - f * h, B = -(d * i - f * g), C = d * h - e * g;
+  const D = -(b * i - c * h), E = a * i - c * g, F = -(a * h - b * g);
+  const G = b * f - c * e, H = -(a * f - c * d), I = a * e - b * d;
+  const det = a * A + b * B + c * C;
+  return [A / det, D / det, G / det, B / det, E / det, H / det, C / det, F / det, I / det];
+}
+
+/* ---------- state ---------- */
+const $ = id => document.getElementById(id);
+const canvas = $("view"), ctx = canvas.getContext("2d"), video = $("video");
+let W = 0, H = 0;
+let stream = null, landmarker = null, lastVideoTime = -1, wakeLock = null;
+
+const S = loadSettings();
+buildKeys(S.numbers);
+let H_kb = null, H_inv = null;             // keyboard(unit square) <-> canvas px
+let hands = { L: null, R: null };          // per side: { pts:[21], tips:{finger:{x,y,u,v,key}} }
+const smooth = { L: {}, R: {} };
+let drag = null;
+
+function defaults() {
+  return { facing: "environment", mirror: false, flipped: false, editing: true, numbers: true, opacity: 70, corners: null };
+}
+function loadSettings() {
+  let s = defaults();
+  try { const raw = localStorage.getItem("airkb.v1"); if (raw) s = Object.assign(s, JSON.parse(raw)); } catch (e) {}
+  return s;
+}
+function saveSettings() { try { localStorage.setItem("airkb.v1", JSON.stringify(S)); } catch (e) {} }
+
+// default quad: ~3:1 keyboard, slight perspective (far edge narrower), in normalized coords
+function defaultCorners(flipped) {
+  const aspect = (W && H) ? W / H : 16 / 9;
+  const wf = 0.9;
+  let hf = (wf * aspect) / 3 * (NROWS / 5);
+  hf = Math.min(hf, 0.6);
+  const cy = 0.62, top = cy - hf / 2, bot = cy + hf / 2, inset = 0.05;
+  let c = [{ x: 0.5 - wf / 2 + inset, y: top }, { x: 0.5 + wf / 2 - inset, y: top },
+           { x: 0.5 + wf / 2, y: bot }, { x: 0.5 - wf / 2, y: bot }];
+  if (flipped) c = flipCorners(c);
+  return c;
+}
+// vertical flip: top edge <-> bottom edge
+function flipCorners(c) { return [c[3], c[2], c[1], c[0]]; }
+
+function updateHomography() {
+  if (!S.corners) S.corners = defaultCorners(S.flipped);
+  const px = S.corners.map(p => ({ x: p.x * W, y: p.y * H }));
+  H_kb = squareToQuad(px);
+  H_inv = invertH(H_kb);
+}
+const kbToPx = (u, v) => applyH(H_kb, u / COLS, v / NROWS);
+function pxToKb(x, y) { const q = applyH(H_inv, x, y); return { u: q.x * COLS, v: q.y * NROWS }; }
+
+/* ---------- camera ---------- */
+async function startCamera() {
+  if (!window.isSecureContext || !navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    throw new Error("This page needs a secure (https://) address to use the camera.\nHost it on GitHub Pages / Netlify, or open it on a computer straight from the file.");
+  }
+  if (stream) stream.getTracks().forEach(t => t.stop());
+  stream = await navigator.mediaDevices.getUserMedia({
+    audio: false,
+    video: { facingMode: { ideal: S.facing }, width: { ideal: 1280 }, height: { ideal: 720 } },
+  });
+  video.srcObject = stream;
+  await video.play();
+  await new Promise(r => video.videoWidth ? r() : video.addEventListener("loadedmetadata", r, { once: true }));
+}
+
+async function begin(preset) {
+  $("err").textContent = "";
+  if (preset === "front") { S.facing = "user"; S.mirror = true; if (!S.flipped) { S.flipped = true; S.corners = null; } }
+  if (preset === "rear")  { S.facing = "environment"; S.mirror = false; if (S.flipped) { S.flipped = false; S.corners = null; } }
+  saveSettings(); syncButtons();
+  try {
+    await startCamera();
+  } catch (e) {
+    $("err").textContent = (e && e.name === "NotAllowedError")
+      ? "Camera permission was blocked. Allow camera access for this page in your browser's site settings, then try again."
+      : (e.message || String(e));
+    return;
+  }
+  $("overlay").classList.add("hidden");
+  requestWakeLock();
+  if (!landmarker) loadModel();
+  showHint();
+}
+
+async function loadModel() {
+  setModel("Hand model: loading…");
+  try {
+    let vision;
+    try { vision = await import(TV + "/vision_bundle.mjs"); }
+    catch (e) { vision = await import(TV); }
+    const fileset = await vision.FilesetResolver.forVisionTasks(TV + "/wasm");
+    const opts = delegate => ({
+      baseOptions: { modelAssetPath: MODEL, delegate },
+      runningMode: "VIDEO", numHands: 2,
+      minHandDetectionConfidence: 0.5, minHandPresenceConfidence: 0.5, minTrackingConfidence: 0.5,
+    });
+    try { landmarker = await vision.HandLandmarker.createFromOptions(fileset, opts("GPU")); setModel("Hand model: ready (GPU)"); }
+    catch (e) { landmarker = await vision.HandLandmarker.createFromOptions(fileset, opts("CPU")); setModel("Hand model: ready (CPU)"); }
+  } catch (e) {
+    console.error(e);
+    setModel("Hand model failed to load — check your connection");
+  }
+}
+function setModel(t) { $("model").textContent = t; }
+
+async function requestWakeLock() {
+  try { if ("wakeLock" in navigator) wakeLock = await navigator.wakeLock.request("screen"); } catch (e) {}
+}
+document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible" && stream) requestWakeLock(); });
+
+/* ---------- tracking ---------- */
+function detect() {
+  if (!landmarker || video.readyState < 2 || video.currentTime === lastVideoTime) return;
+  lastVideoTime = video.currentTime;
+  let res;
+  try { res = landmarker.detectForVideo(video, performance.now()); } catch (e) { return; }
+  const found = (res.landmarks || []).map(lms => {
+    const pts = lms.map(p => ({ x: (S.mirror ? 1 - p.x : p.x) * W, y: p.y * H }));
+    const tips = {};
+    let su = 0, n = 0;
+    for (const f of FINGERS) {
+      // contact point: mostly the tip, nudged toward the last knuckle (finger pad)
+      const t = pts[f.tip], k = pts[f.tip - 1];
+      const x = t.x * 0.85 + k.x * 0.15, y = t.y * 0.85 + k.y * 0.15;
+      tips[f.name] = { x, y };
+      if (f.name !== "thumb") { su += pxToKb(x, y).u; n++; }
+    }
+    return { pts, tips, meanU: su / n };
+  });
+
+  // Assign left/right by position on the keyboard (robust to mirroring & camera side)
+  const next = { L: null, R: null };
+  if (found.length >= 2) {
+    found.sort((a, b) => a.meanU - b.meanU);
+    next.L = found[0]; next.R = found[found.length - 1];
+  } else if (found.length === 1) {
+    next[found[0].meanU < COLS / 2 ? "L" : "R"] = found[0];
+  }
+
+  for (const side of ["L", "R"]) {
+    const h = next[side];
+    if (!h) { smooth[side] = {}; hands[side] = null; continue; }
+    for (const f of FINGERS) {
+      const raw = h.tips[f.name], prev = smooth[side][f.name];
+      const a = 0.55; // smoothing (higher = snappier)
+      const s = prev ? { x: prev.x + (raw.x - prev.x) * a, y: prev.y + (raw.y - prev.y) * a } : { ...raw };
+      smooth[side][f.name] = s;
+      const kb = pxToKb(s.x, s.y);
+      h.tips[f.name] = { x: s.x, y: s.y, u: kb.u, v: kb.v, key: keyAt(kb.u, kb.v) };
+    }
+    hands[side] = h;
+  }
+}
+
+function fingerStatus(side, finger) {
+  const h = hands[side];
+  if (!h) return { state: "off", key: null };
+  const t = h.tips[finger];
+  const target = keyByLabel(HOME[side][finger]);
+  if (t.key && target && t.key === target) return { state: "good", key: t.key };
+  const d = target ? distToKey(t.u, t.v, target) : 99;
+  return { state: d < 0.6 ? "near" : "bad", key: t.key };
+}
+
+/* ---------- drawing ---------- */
+function resizeIfNeeded() {
+  if (video.videoWidth && (canvas.width !== video.videoWidth || canvas.height !== video.videoHeight)) {
+    const first = !W;
+    W = canvas.width = video.videoWidth; H = canvas.height = video.videoHeight;
+    if (first && !S.corners) S.corners = defaultCorners(S.flipped);
+    updateHomography();
+  }
+}
+
+function quadPath(u0, v0, u1, v1) {
+  const a = kbToPx(u0, v0), b = kbToPx(u1, v0), c = kbToPx(u1, v1), d = kbToPx(u0, v1);
+  ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.lineTo(c.x, c.y); ctx.lineTo(d.x, d.y); ctx.closePath();
+}
+
+function drawKeyboard() {
+  const op = S.opacity / 100;
+  const homeLabels = new Set([...Object.values(HOME.L), ...Object.values(HOME.R)].filter(l => l !== "Space"));
+  const lit = new Map(); // key -> color
+  for (const side of ["L", "R"]) {
+    const h = hands[side]; if (!h) continue;
+    for (const f of FINGERS) { const k = h.tips[f.name].key; if (k && !lit.has(k)) lit.set(k, f.color); }
+  }
+  const gap = 0.07;
+  const scale = Math.max(W, H) / 1000;
+
+  for (const k of KEYS) {
+    quadPath(k.u0 + gap, k.row + gap, k.u1 - gap, k.row + 1 - gap);
+    const color = lit.get(k);
+    if (color) { ctx.globalAlpha = Math.min(1, 0.35 + op * 0.5); ctx.fillStyle = color; ctx.fill(); }
+    else { ctx.globalAlpha = op * 0.28; ctx.fillStyle = "#0b1220"; ctx.fill(); }
+    ctx.globalAlpha = op;
+    ctx.lineWidth = (homeLabels.has(k.label) ? 2.4 : 1.3) * scale;
+    ctx.strokeStyle = homeLabels.has(k.label) ? "#5eead4" : "rgba(255,255,255,0.85)";
+    ctx.stroke();
+
+    // label
+    const top = kbToPx((k.u0 + k.u1) / 2, k.row), bot = kbToPx((k.u0 + k.u1) / 2, k.row + 1);
+    const keyH = Math.hypot(bot.x - top.x, bot.y - top.y);
+    const c = kbToPx((k.u0 + k.u1) / 2, k.row + 0.5);
+    let fs = Math.max(8, Math.min(48, keyH * (k.label.length > 1 ? 0.3 : 0.45)));
+    ctx.font = `600 ${fs}px system-ui, sans-serif`;
+    ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    ctx.globalAlpha = Math.min(1, op + 0.15);
+    ctx.lineWidth = Math.max(2, fs * 0.18); ctx.strokeStyle = color ? "rgba(255,255,255,0.55)" : "rgba(0,0,0,0.6)";
+    ctx.strokeText(k.label, c.x, c.y);
+    ctx.fillStyle = color ? "#0b0d11" : "#ffffff";
+    ctx.fillText(k.label, c.x, c.y);
+
+    // F / J locator bumps
+    if (k.label === "F" || k.label === "J") {
+      const p = kbToPx((k.u0 + k.u1) / 2 - 0.15, k.row + 0.8), q = kbToPx((k.u0 + k.u1) / 2 + 0.15, k.row + 0.8);
+      ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.lineTo(q.x, q.y);
+      ctx.lineWidth = 3 * scale; ctx.strokeStyle = color ? "#0b0d11" : "#ffffff"; ctx.stroke();
+    }
+  }
+  ctx.globalAlpha = 1;
+
+  if (S.editing) {
+    quadPath(0, 0, COLS, NROWS);
+    ctx.setLineDash([10 * scale, 7 * scale]); ctx.lineWidth = 2 * scale; ctx.strokeStyle = "#5eead4"; ctx.stroke(); ctx.setLineDash([]);
+    const r = handleRadius();
+    S.corners.forEach((p, i) => {
+      const x = p.x * W, y = p.y * H;
+      ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2);
+      ctx.fillStyle = drag && drag.idx === i ? "rgba(94,234,212,0.55)" : "rgba(94,234,212,0.25)"; ctx.fill();
+      ctx.lineWidth = 2.5 * scale; ctx.strokeStyle = "#5eead4"; ctx.stroke();
+      ctx.beginPath(); ctx.arc(x, y, 3.5 * scale, 0, Math.PI * 2); ctx.fillStyle = "#5eead4"; ctx.fill();
+    });
+  }
+}
+
+function drawHands() {
+  const scale = Math.max(W, H) / 1000;
+  for (const side of ["L", "R"]) {
+    const h = hands[side]; if (!h) continue;
+    ctx.lineWidth = 2 * scale; ctx.strokeStyle = "rgba(255,255,255,0.55)";
+    ctx.beginPath();
+    for (const [a, b] of HAND_LINKS) { ctx.moveTo(h.pts[a].x, h.pts[a].y); ctx.lineTo(h.pts[b].x, h.pts[b].y); }
+    ctx.stroke();
+
+    for (const f of FINGERS) {
+      const t = h.tips[f.name];
+      const st = f.name === "thumb" ? null : fingerStatus(side, f.name).state;
+      const ring = st === "good" ? "#22c55e" : st === "near" ? "#f59e0b" : st === "bad" ? "#ef4444" : "#ffffff";
+      ctx.beginPath(); ctx.arc(t.x, t.y, 9 * scale, 0, Math.PI * 2);
+      ctx.fillStyle = f.color; ctx.fill();
+      ctx.lineWidth = 3.5 * scale; ctx.strokeStyle = ring; ctx.stroke();
+    }
+    // side tag at wrist
+    const w = h.pts[0];
+    ctx.font = `700 ${16 * scale}px system-ui, sans-serif`; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    ctx.lineWidth = 4 * scale; ctx.strokeStyle = "rgba(0,0,0,.7)"; ctx.strokeText(side === "L" ? "Left" : "Right", w.x, w.y + 18 * scale);
+    ctx.fillStyle = "#fff"; ctx.fillText(side === "L" ? "Left" : "Right", w.x, w.y + 18 * scale);
+  }
+}
+
+/* ---------- status bar ---------- */
+const chipEls = [];
+(function buildChips() {
+  const box = $("chips");
+  for (const c of CHIP_ORDER) {
+    if (!c) { const g = document.createElement("div"); g.className = "chip-gap"; box.appendChild(g); chipEls.push(null); continue; }
+    const el = document.createElement("div"); el.className = "chip";
+    el.innerHTML = `<b>${HOME[c[0]][c[1]]}</b><span></span>`;
+    el.title = (c[0] === "L" ? "Left " : "Right ") + c[1];
+    box.appendChild(el); chipEls.push(el);
+  }
+})();
+let lastSummary = "";
+function updateStatus() {
+  let good = 0, seen = 0;
+  CHIP_ORDER.forEach((c, i) => {
+    if (!c) return;
+    const st = fingerStatus(c[0], c[1]);
+    if (st.state !== "off") seen++;
+    if (st.state === "good") good++;
+    const el = chipEls[i];
+    const cls = "chip" + (st.state === "off" ? "" : " " + st.state);
+    if (el.className !== cls) el.className = cls;
+    const lbl = st.state === "off" ? "" : (st.key ? st.key.label : "—");
+    if (el.lastChild.textContent !== lbl) el.lastChild.textContent = lbl;
+  });
+  let text;
+  if (!landmarker) text = `Home row —<small>${stream ? "Loading hand model…" : "Camera off"}</small>`;
+  else if (!seen) text = `Home row —<small>No hands in view</small>`;
+  else if (good === 8) text = `Home row ✓<small>All 8 fingers in place</small>`;
+  else text = `Home row ${good}/8<small>${8 - good} finger${8 - good === 1 ? "" : "s"} off</small>`;
+  if (text !== lastSummary) { $("summary").innerHTML = text; lastSummary = text; }
+}
+
+/* ---------- main loop ---------- */
+function loop() {
+  requestAnimationFrame(loop);
+  if (!video.videoWidth) return;
+  resizeIfNeeded();
+  ctx.save();
+  if (S.mirror) { ctx.translate(W, 0); ctx.scale(-1, 1); }
+  ctx.drawImage(video, 0, 0, W, H);
+  ctx.restore();
+  detect();
+  drawKeyboard();
+  drawHands();
+  updateStatus();
+}
+requestAnimationFrame(loop);
+
+/* ---------- corner editing ---------- */
+function canvasScale() { const r = canvas.getBoundingClientRect(); return r.width ? W / r.width : 1; }
+function handleRadius() { return 22 * canvasScale(); }
+function evtToCanvas(e) {
+  const r = canvas.getBoundingClientRect();
+  return { x: (e.clientX - r.left) * (W / r.width), y: (e.clientY - r.top) * (H / r.height) };
+}
+canvas.addEventListener("pointerdown", e => {
+  if (!S.editing || !W) return;
+  const p = evtToCanvas(e);
+  const hit = handleRadius() * 1.6;
+  let best = -1, bd = Infinity;
+  S.corners.forEach((c, i) => { const d = Math.hypot(c.x * W - p.x, c.y * H - p.y); if (d < bd) { bd = d; best = i; } });
+  if (bd <= hit) drag = { idx: best, last: p };
+  else {
+    const kb = pxToKb(p.x, p.y);
+    if (kb.u >= 0 && kb.u <= COLS && kb.v >= 0 && kb.v <= NROWS) drag = { idx: -1, last: p };
+  }
+  if (drag) { canvas.setPointerCapture(e.pointerId); e.preventDefault(); }
+});
+canvas.addEventListener("pointermove", e => {
+  if (!drag) return;
+  const p = evtToCanvas(e);
+  const dx = (p.x - drag.last.x) / W, dy = (p.y - drag.last.y) / H;
+  drag.last = p;
+  const clamp = v => Math.max(-0.25, Math.min(1.25, v));
+  if (drag.idx >= 0) { const c = S.corners[drag.idx]; c.x = clamp(c.x + dx); c.y = clamp(c.y + dy); }
+  else S.corners.forEach(c => { c.x = clamp(c.x + dx); c.y = clamp(c.y + dy); });
+  updateHomography();
+});
+const endDrag = () => { if (drag) { drag = null; saveSettings(); } };
+canvas.addEventListener("pointerup", endDrag);
+canvas.addEventListener("pointercancel", endDrag);
+
+/* ---------- controls ---------- */
+function syncButtons() {
+  $("btnEdit").classList.toggle("on", S.editing);
+  $("btnEdit").textContent = S.editing ? "✓ Done" : "✥ Adjust";
+  $("btnMirror").classList.toggle("on", S.mirror);
+  $("btnFlip").classList.toggle("on", S.flipped);
+  $("btnRows").classList.toggle("on", S.numbers);
+  $("btnCam").textContent = S.facing === "user" ? "⟲ Front cam" : "⟲ Rear cam";
+  $("opacity").value = S.opacity;
+}
+function showHint() {
+  $("hint").textContent = S.editing ? "Drag the corners (or the middle) so the keyboard sits where your hands rest" : "";
+}
+$("startFront").onclick = () => begin("front");
+$("startRear").onclick = () => begin("rear");
+$("btnEdit").onclick = () => { S.editing = !S.editing; saveSettings(); syncButtons(); showHint(); };
+$("btnFlip").onclick = () => {
+  S.flipped = !S.flipped;
+  if (S.corners) S.corners = flipCorners(S.corners);
+  saveSettings(); syncButtons(); if (W) updateHomography();
+};
+$("btnMirror").onclick = () => {
+  S.mirror = !S.mirror;
+  // keep the keyboard attached to the same physical spot on the desk
+  if (S.corners) S.corners = S.corners.map(p => ({ x: 1 - p.x, y: p.y }));
+  smooth.L = {}; smooth.R = {};
+  saveSettings(); syncButtons(); if (W) updateHomography();
+};
+$("btnCam").onclick = async () => {
+  S.facing = S.facing === "user" ? "environment" : "user";
+  saveSettings(); syncButtons();
+  if (stream) { try { await startCamera(); } catch (e) { $("hint").textContent = "Couldn't switch camera: " + (e.message || e); } }
+};
+$("btnRows").onclick = () => {
+  // keep the letter rows where they are when adding/removing the number row
+  const had = S.numbers;
+  if (W && S.corners) {
+    const newTopV = had ? 1 : -1;  // in current key-row units
+    const tl = kbToPx(0, newTopV), tr = kbToPx(COLS, newTopV);
+    S.corners[0] = { x: tl.x / W, y: tl.y / H }; S.corners[1] = { x: tr.x / W, y: tr.y / H };
+  }
+  S.numbers = !had; buildKeys(S.numbers);
+  saveSettings(); syncButtons(); if (W) updateHomography();
+};
+$("opacity").oninput = e => { S.opacity = +e.target.value; saveSettings(); };
+$("btnReset").onclick = () => { S.corners = defaultCorners(S.flipped); saveSettings(); if (W) updateHomography(); };
+$("btnFull").onclick = async () => {
+  try { if (!document.fullscreenElement) await document.documentElement.requestFullscreen(); else await document.exitFullscreen(); } catch (e) {}
+};
+syncButtons();
+
+</script>
+</body>
+</html>
