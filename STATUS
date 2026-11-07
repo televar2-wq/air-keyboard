@@ -1,0 +1,2 @@
+success run=1 sha=2e219d10bcca746db2d25238c6f68cdabe3a0e6a
+-rw-r--r-- 1 runner runner 9398198 Nov  7 16:13 app/src/main/assets/pose_landmarker_full.task
