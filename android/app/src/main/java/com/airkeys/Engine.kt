@@ -80,6 +80,7 @@ object Engine {
     @Volatile var swipeBackspace = true
     @Volatile var autocorrect = true
     @Volatile var zoomToKeyboard = true
+    @Volatile var railLeft = false          // side for the big buttons on the main screen
     /** The word being typed (autocorrect's current guess), shown on the camera view. */
     @Volatile var composing = ""
     @Volatile var showWindow = true
@@ -115,6 +116,7 @@ object Engine {
         swipeBackspace = p.getBoolean("swipe", true)
         autocorrect = p.getBoolean("autocorrect", true)
         zoomToKeyboard = p.getBoolean("zoom", true)
+        railLeft = p.getBoolean("railLeft", false)
         board = Board(p.getBoolean("numbers", true))
         val c = p.getString("corners", null)
             ?.split(",")?.mapNotNull { it.toFloatOrNull() }
@@ -148,6 +150,7 @@ object Engine {
             .putBoolean("swipe", swipeBackspace)
             .putBoolean("autocorrect", autocorrect)
             .putBoolean("zoom", zoomToKeyboard)
+            .putBoolean("railLeft", railLeft)
             .putString("corners", corners?.joinToString(","))
             .apply()
     }

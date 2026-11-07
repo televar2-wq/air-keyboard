@@ -46,8 +46,12 @@ class KeyboardOverlayView(ctx: Context, startEditable: Boolean) : View(ctx) {
     private val target = RectF()
     private var haveDst = false
 
-    /** Height of controls drawn over the top of this view; banners go below it. */
+    /** Space taken by controls drawn over this view; badges and zoom keep clear of it. */
     var topInset = 0f
+        set(value) { field = value; invalidate() }
+    var leftInset = 0f
+        set(value) { field = value; invalidate() }
+    var rightInset = 0f
         set(value) { field = value; invalidate() }
     private val badgeRect = RectF()
     private val listener: () -> Unit = { postInvalidate() }
@@ -95,12 +99,14 @@ class KeyboardOverlayView(ctx: Context, startEditable: Boolean) : View(ctx) {
             val rw = max((x1 - x0) * a, 0.05f)
             val rh = max(y1 - y0, 0.05f)
             val usableH = max(vh - topInset, vh * 0.5f)
-            s = max(min(vw / rw, usableH / rh), cover)
+            val usableW = max(vw - leftInset - rightInset, vw * 0.5f)
+            s = max(min(usableW / rw, usableH / rh), cover)
             cx = (x0 + x1) / 2f * a
             cy = (y0 + y1) / 2f
         }
         val centerY = topInset + (vh - topInset) / 2f
-        val left = (vw / 2f - cx * s).coerceIn(vw - a * s, 0f)
+        val centerX = leftInset + (vw - leftInset - rightInset) / 2f
+        val left = (centerX - cx * s).coerceIn(vw - a * s, 0f)
         val top = (centerY - cy * s).coerceIn(vh - s, 0f)
         target.set(left, top, left + a * s, top + s)
 
@@ -156,7 +162,7 @@ class KeyboardOverlayView(ctx: Context, startEditable: Boolean) : View(ctx) {
         val tw = text.measureText(word)
         val padX = 14f * density
         val h = 36f * density
-        val cxp = width / 2f
+        val cxp = leftInset + (width - leftInset - rightInset) / 2f
         val y1 = height - 10f * density
         badgeRect.set(cxp - tw / 2f - padX, y1 - h, cxp + tw / 2f + padX, y1)
         fill.color = 0xE60E1116.toInt()
@@ -184,13 +190,13 @@ class KeyboardOverlayView(ctx: Context, startEditable: Boolean) : View(ctx) {
         val msg = (if (ready) "⌨ " else "⚠ ") + Engine.typingTargetText()
         text.clearShadowLayer()
         text.textSize = 12f * density
-        val maxW = width - 70f * density
+        val maxW = width - leftInset - rightInset - 20f * density
         var label = msg
         while (label.length > 4 && text.measureText(label) > maxW) label = label.dropLast(2) + "…"
         val tw = text.measureText(label)
         val padX = 8f * density
         val h = 22f * density
-        val x0 = 6f * density
+        val x0 = leftInset + 6f * density
         val y0 = topInset + 6f * density
         fill.color = if (ready) 0xCC0E1116.toInt() else 0xE6B91C1C.toInt()
         badgeRect.set(x0, y0, x0 + tw + padX * 2, y0 + h)

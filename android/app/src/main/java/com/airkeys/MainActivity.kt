@@ -70,6 +70,9 @@ class MainActivity : ComponentActivity() {
     private lateinit var btnSwipe: Button
     private lateinit var btnAuto: Button
     private lateinit var btnZoom: Button
+    private lateinit var btnRailSide: Button
+    private lateinit var rail: LinearLayout
+    private var lastRailWidth = 0
 
     private val permLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
@@ -91,33 +94,33 @@ class MainActivity : ComponentActivity() {
         Engine.load(this)
         d = resources.displayMetrics.density
 
-        // Camera view fills the whole screen; controls float on top of it.
+        // Camera view fills the whole screen; status floats top-left, buttons sit in a
+        // rail down one side (easy to reach with the phone half folded).
         val root = android.widget.FrameLayout(this).apply { setBackgroundColor(Color.BLACK) }
-        val chrome = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
 
-        // ---- slim top bar (always visible) ----
-        val topBar = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            setBackgroundColor(0x990E1116.toInt())
-            setPadding(px(4), px(4), px(4), px(4))
-        }
         status = TextView(this).apply {
             textSize = 12.5f
             setTextColor(Color.WHITE)
             maxLines = 2
-            setPadding(px(4), 0, px(4), 0)
+            setPadding(px(8), px(4), px(8), px(4))
+            setBackgroundColor(0x990E1116.toInt())
         }
-        topBar.addView(status, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-        btnFit = smallButton("✋ Fit") {
+
+        rail = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER_HORIZONTAL
+            setPadding(px(4), px(4), px(4), px(4))
+            setBackgroundColor(0x990E1116.toInt())
+        }
+        btnFit = railButton {
             if (Engine.calibrating) Engine.cancelCalibration() else fitToHands()
             refresh()
         }
-        btnAdjust = smallButton("✥ Adjust") {
+        btnAdjust = railButton {
             overlay.editable = !overlay.editable
             refresh()
         }
-        btnTypingTop = smallButton("Typing") {
+        btnTypingTop = railButton {
             if (Engine.typingEnabled && !Engine.imeActive) {
                 // The usual reason taps don't type: Air Keys isn't the active keyboard.
                 if (imeEnabled()) imm().showInputMethodPicker()
@@ -128,15 +131,14 @@ class MainActivity : ComponentActivity() {
             }
             refresh()
         }
-        btnSetup = smallButton("⚙") {
+        btnSetup = railButton {
             showSetup = !showSetup
             applyMode()
         }
-        topBar.addView(btnFit)
-        topBar.addView(btnAdjust)
-        topBar.addView(btnTypingTop)
-        topBar.addView(btnSetup)
-        chrome.addView(topBar)
+        rail.addView(btnFit)
+        rail.addView(btnAdjust)
+        rail.addView(btnTypingTop)
+        rail.addView(btnSetup)
 
         // ---- setup panel (folds away in full view) ----
         val panel = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
@@ -230,7 +232,10 @@ class MainActivity : ComponentActivity() {
         btnZoom = button("Zoom") {
             Engine.zoomToKeyboard = !Engine.zoomToKeyboard; Engine.save(); refresh(); overlay.invalidate()
         }
-        panel.addView(row(btnAuto, btnZones, btnFollow, btnSwipe, btnZoom))
+        btnRailSide = button("Buttons side") {
+            Engine.railLeft = !Engine.railLeft; Engine.save(); placeRail(rail.width); refresh()
+        }
+        panel.addView(row(btnAuto, btnZones, btnFollow, btnSwipe, btnZoom, btnRailSide))
 
         panel.addView(TextView(this).apply {
             text = "Finger zones: each finger only types its own touch-typing keys, so a slightly " +
@@ -260,17 +265,22 @@ class MainActivity : ComponentActivity() {
 
         setupPanel = ScrollView(this).apply {
             setBackgroundColor(0xF20E1116.toInt())
-            setPadding(px(8), 0, px(8), px(8))
+            setPadding(px(10), px(6), px(10), px(8))
             addView(panel)
         }
-        chrome.addView(setupPanel, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
 
         // ---- live view ----
         overlay = KeyboardOverlayView(this, false)
         root.addView(overlay, android.widget.FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
-        root.addView(chrome, android.widget.FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
-        // Banners and zoom keep clear of the top bar.
-        topBar.addOnLayoutChangeListener { v, _, _, _, _, _, _, _, _ -> overlay.topInset = v.height.toFloat() }
+        root.addView(setupPanel, android.widget.FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        root.addView(status, android.widget.FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        root.addView(rail, android.widget.FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        // Badges and zoom keep clear of the status line and the rail.
+        status.addOnLayoutChangeListener { v, _, _, _, _, _, _, _, _ -> overlay.topInset = v.bottom.toFloat() }
+        rail.addOnLayoutChangeListener { v, _, _, _, _, _, _, _, _ ->
+            if (v.width != lastRailWidth) { lastRailWidth = v.width; placeRail(v.width) }
+        }
+        placeRail(px(76))
 
         setContentView(root)
 
@@ -411,9 +421,11 @@ class MainActivity : ComponentActivity() {
         btnSwipe.text = if (Engine.swipeBackspace) "Swipe ⌫: on" else "Swipe ⌫: off"
         btnAuto.text = if (Engine.autocorrect) "Autocorrect: on" else "Autocorrect: off"
         btnZoom.text = if (Engine.zoomToKeyboard) "Zoom to keyboard: on" else "Zoom to keyboard: off"
-        btnFit.text = if (Engine.calibrating) "✕ Cancel" else "✋ Fit"
+        if (Engine.calibrating) setRail(btnFit, "✕", "Cancel") else setRail(btnFit, "✋", "Fit")
         btnFit.setTextColor(if (Engine.calibrating) 0xFF5EEAD4.toInt() else Color.WHITE)
-        btnAdjust.text = if (overlay.editable) "✓ Done" else "✥ Adjust"
+        if (overlay.editable) setRail(btnAdjust, "✓", "Done") else setRail(btnAdjust, "✥", "Adjust")
+        setRail(btnSetup, "⚙", if (showSetup) "Close" else "Setup")
+        btnRailSide.text = if (Engine.railLeft) "Buttons: left side" else "Buttons: right side"
         btnAdjust.setTextColor(if (overlay.editable) 0xFF5EEAD4.toInt() else Color.WHITE)
         updateTypingButton()
         btnSetup.setTextColor(if (showSetup) 0xFF5EEAD4.toInt() else Color.WHITE)
@@ -422,10 +434,10 @@ class MainActivity : ComponentActivity() {
 
     private fun updateTypingButton() {
         val needsKeyboard = Engine.typingEnabled && !Engine.imeActive
-        btnTypingTop.text = when {
-            needsKeyboard -> "⌨ Choose"
-            Engine.typingEnabled -> "⌨ On"
-            else -> "⌨ Off"
+        when {
+            needsKeyboard -> setRail(btnTypingTop, "⌨", "Choose")
+            Engine.typingEnabled -> setRail(btnTypingTop, "⌨", "On")
+            else -> setRail(btnTypingTop, "⌨", "Off")
         }
         btnTypingTop.setTextColor(
             when {
@@ -450,7 +462,7 @@ class MainActivity : ComponentActivity() {
         if (overlay.editable) parts.add("drag the corners")
         if (!Engine.calibratedOnce && Engine.running && !Engine.calibrating) parts.add("tap ✋ Fit to line up the keyboard")
         status.text = parts.joinToString("  ·  ")
-        btnFit.text = if (Engine.calibrating) "✕ Cancel" else "✋ Fit"
+        if (Engine.calibrating) setRail(btnFit, "✕", "Cancel") else setRail(btnFit, "✋", "Fit")
         updateTypingButton()
         btnStart.text = if (Engine.running) "■ Stop camera" else "▶ Start camera"
         if (Engine.running) window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
@@ -471,6 +483,48 @@ class MainActivity : ComponentActivity() {
         isAllCaps = false
         textSize = 13f
         setOnClickListener { onClick() }
+    }
+
+    /** Big square button for the side rail. */
+    private fun railButton(onClick: () -> Unit) = Button(this).apply {
+        isAllCaps = false
+        textSize = 12f
+        setTextColor(Color.WHITE)
+        setBackgroundColor(0xCC1D222B.toInt())
+        minWidth = 0
+        minimumWidth = 0
+        minHeight = 0
+        minimumHeight = 0
+        setPadding(px(2), px(4), px(2), px(4))
+        layoutParams = LinearLayout.LayoutParams(px(68), px(66)).apply { setMargins(0, px(4), 0, px(4)) }
+        setOnClickListener { onClick() }
+    }
+
+    /** Icon on top (larger), label underneath. */
+    private fun setRail(b: Button, icon: String, label: String) {
+        val sp = android.text.SpannableString("$icon\n$label")
+        sp.setSpan(android.text.style.RelativeSizeSpan(1.7f), 0, icon.length, 0)
+        b.text = sp
+    }
+
+    /** Put the rail on the chosen side; the setup panel and camera zoom keep clear of it. */
+    private fun placeRail(railWidth: Int) {
+        val left = Engine.railLeft
+        (rail.layoutParams as? android.widget.FrameLayout.LayoutParams)?.let {
+            it.gravity = (if (left) Gravity.START else Gravity.END) or Gravity.CENTER_VERTICAL
+            rail.layoutParams = it
+        }
+        (status.layoutParams as? android.widget.FrameLayout.LayoutParams)?.let {
+            it.gravity = Gravity.TOP or (if (left) Gravity.END else Gravity.START)
+            it.setMargins(if (left) 0 else px(6), px(6), if (left) px(6) else 0, 0)
+            status.layoutParams = it
+        }
+        (setupPanel.layoutParams as? android.widget.FrameLayout.LayoutParams)?.let {
+            it.setMargins(if (left) railWidth else 0, 0, if (left) 0 else railWidth, 0)
+            setupPanel.layoutParams = it
+        }
+        overlay.leftInset = if (left) railWidth.toFloat() else 0f
+        overlay.rightInset = if (left) 0f else railWidth.toFloat()
     }
 
     private fun smallButton(t: String, onClick: () -> Unit) = Button(this).apply {
