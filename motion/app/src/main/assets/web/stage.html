@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Motion Puppet Stage</title>
+<style>
+  :root { --bg:#0e1116; --panel:rgba(14,17,22,.72); --line:#2b313c; --text:#e8ebf0; --dim:#9aa3af; --accent:#5eead4; --p1:#5eead4; --p2:#f472b6; }
+  * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  html, body { margin:0; height:100%; background:#151a24; color:var(--text); font-family:system-ui, sans-serif; overflow:hidden; user-select:none; }
+  #view { position:fixed; inset:0; display:block; touch-action:none; }
+  #status { position:fixed; left:8px; top:8px; background:var(--panel); padding:6px 10px; border-radius:10px; font-size:13px; max-width:calc(100% - 110px); line-height:1.35; }
+  #status b { color:var(--accent); font-weight:650; }
+  #rail { position:fixed; right:6px; top:50%; transform:translateY(-50%); display:flex; flex-direction:column; gap:8px; background:var(--panel); padding:6px; border-radius:14px; }
+  #rail button { width:70px; min-height:62px; border:1px solid var(--line); border-radius:12px; background:rgba(29,34,43,.9); color:var(--text);
+    font:inherit; font-size:11.5px; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:2px; padding:4px; cursor:pointer; }
+  #rail button .i { font-size:22px; line-height:1; }
+  #rail button.on { border-color:var(--accent); color:var(--accent); }
+  #rail button .nm { max-width:62px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--dim); font-size:10px; }
+  #rail button[hidden] { display:none; }
+  #bar { position:fixed; left:8px; right:92px; bottom:8px; display:flex; align-items:center; gap:10px; background:var(--panel); padding:8px 12px; border-radius:12px; }
+  #bar input { flex:1; accent-color:var(--accent); }
+  #time { font-size:12.5px; color:var(--dim); font-variant-numeric:tabular-nums; min-width:84px; text-align:right; }
+  #toast { position:fixed; left:50%; bottom:70px; transform:translateX(-50%); background:rgba(14,17,22,.92); border:1px solid var(--accent); color:var(--text);
+    padding:8px 14px; border-radius:999px; font-size:13.5px; display:none; max-width:90%; text-align:center; }
+  #recdot { position:fixed; top:10px; right:96px; color:#ef4444; font-weight:700; font-size:13px; display:none; background:var(--panel); padding:4px 10px; border-radius:999px; }
+  body.recording #rail, body.recording #bar { opacity:.35; pointer-events:none; }
+  input[type=file] { display:none; }
+</style>
+<script type="importmap">
+  { "imports": { "three": "./three/three.module.js", "three/addons/": "./three/addons/" } }
+</script>
+</head>
+<body>
+<canvas id="view"></canvas>
+<div id="status">Loading…</div>
+<div id="recdot">● REC</div>
+<div id="rail">
+  <button id="bChar0"><span class="i">🧍</span>Person 1<span class="nm" id="n0">stick figure</span></button>
+  <button id="bChar1" hidden><span class="i">🧍</span>Person 2<span class="nm" id="n1">stick figure</span></button>
+  <button id="bPlay"><span class="i">⏸</span><span>Pause</span></button>
+  <button id="bVideo"><span class="i">⏺</span><span>Save video</span></button>
+  <button id="bView"><span class="i">⟲</span><span>Reset view</span></button>
+  <button id="bBack"><span class="i">✕</span><span>Back</span></button>
+</div>
+<div id="bar">
+  <input id="scrub" type="range" min="0" max="1000" value="0">
+  <span id="time">0:00 / 0:00</span>
+</div>
+<div id="toast"></div>
+<input id="file" type="file" accept=".glb,.gltf,model/gltf-binary">
+<script type="module" src="./stage.js"></script>
+</body>
+</html>
